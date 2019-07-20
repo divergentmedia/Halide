@@ -542,7 +542,7 @@ void CodeGen_Metal_Dev::CodeGen_Metal_C::add_kernel(Stmt s,
            << "uint3 tid_in_tgroup [[ thread_position_in_threadgroup ]]";
     size_t buffer_index = 0;
     if (any_scalar_args) {
-        stream << ",\nconst device " << name << "_args *_scalar_args [[ buffer(0) ]]";
+        stream << ",\nconstant " << name << "_args &_scalar_args [[ buffer(0) ]]";
         buffer_index++;
     }
 
@@ -570,7 +570,7 @@ void CodeGen_Metal_Dev::CodeGen_Metal_C::add_kernel(Stmt s,
             stream << print_type(args[i].type)
                    << " "
                    << print_name(args[i].name)
-                   << " = _scalar_args->" << print_name(args[i].name)
+                   << " = _scalar_args." << print_name(args[i].name)
                    << ";\n";
         }
     }

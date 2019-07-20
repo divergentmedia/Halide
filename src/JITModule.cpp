@@ -177,6 +177,30 @@ JITModule::Symbol compile_and_get_function(ExecutionEngine &ee, const string &na
 
     return symbol;
 }
+    
+    
+uint64_t searchProcessGlobalsForSymbol(const std::string &name){
+    
+    if (auto SymAddr = RTDyldMemoryManager::getSymbolAddressInProcess(name)){
+        debug(2) << "RTDyldMemoryManager FallBack: " << SymAddr << "\n";
+        return SymAddr;
+    }
+    
+    // retry without "_" at beginning, as RTDyldMemoryManager uses
+    // GetProcAddress and standard libraries like msvcrt.dll use names
+    // with and without "_" (for example "_itoa" but "sin").
+    if (name.length() > 2 && name[0] == '_'){
+        debug(2) << "trying stripping prefix _: " << name.substr(1) << "\n";
+        if (auto SymAddr = RTDyldMemoryManager::getSymbolAddressInProcess(name.substr(1))){
+            debug(2) << "RTDyldMemoryManager FallBack (stripping prefix _): " << SymAddr << "\n";
+            return SymAddr;
+        }
+    }
+    
+    return 0;
+    
+}
+    
 
 // Expand LLVM's search for symbols to include code contained in a set of JITModule.
 // TODO: Does this need to be conditionalized to llvm 3.6?
@@ -189,6 +213,9 @@ public:
     HalideJITMemoryManager(const std::vector<JITModule> &modules) : modules(modules) {}
 
     uint64_t getSymbolAddress(const std::string &name) override {
+        
+        debug(2) << "getSymbolAddress " << name << "\n";
+        
         for (size_t i = 0; i < modules.size(); i++) {
             const JITModule &m = modules[i];
             std::map<std::string, JITModule::Symbol>::const_iterator iter = m.exports().find(name);
@@ -196,10 +223,22 @@ public:
                 iter = m.exports().find(name.substr(1));
             }
             if (iter != m.exports().end()) {
+                debug(2) << "getSymbolAddress SUCCESS: " << iter->second.address << "\n";
                 return (uint64_t)iter->second.address;
             }
         }
-        return SectionMemoryManager::getSymbolAddress(name);
+        
+        if(auto SymAddr = SectionMemoryManager::getSymbolAddress(name)){
+            debug(2) << "SectionMemoryManager FallBack: " << SymAddr << "\n";
+            return SymAddr;
+        }
+        
+        if(auto SymAddr = searchProcessGlobalsForSymbol(name)){
+            debug(2) << "Found symbol is process: " << SymAddr << "\n";
+            return SymAddr;
+        }
+        
+        return 0;
     }
 
     uint8_t *allocateCodeSection(uintptr_t size, unsigned alignment, unsigned section_id, StringRef section_name) override {
@@ -673,7 +712,11 @@ JITModule &make_module(llvm::Module *for_module, Target target,
         target.set_feature(Target::JIT);
         // msan doesn't work for jit modules
         target.set_feature(Target::MSAN, false);
-
+        
+        string error;
+        llvm::sys::DynamicLibrary::LoadLibraryPermanently(nullptr, &error);
+        user_assert(error.empty()) << "Could not load process symbols\n";
+        
         Target one_gpu(target);
         one_gpu.set_feature(Target::Debug, false);
         one_gpu.set_feature(Target::OpenCL, false);
@@ -777,7 +820,26 @@ JITModule &make_module(llvm::Module *for_module, Target target,
         for (auto &f : *module) {
             // LLVM_Runtime_Linker has marked everything that should be exported as weak
             if (f.hasWeakLinkage()) {
+                
+                std::string extern_name = f.getName();
+                
+                if(searchProcessGlobalsForSymbol(extern_name)){
+                    debug(1) << "Found function in process to overload extern (" << extern_name << "), mask it.\n";
+         
+                    std::string old_name = f.getName().str(); //can't keep the stringRef since we're about to munge the backing store
+                    
+                    f.setName(StringRef("_overloaded_") + f.getName());
+                    
+                    auto extern_call = module->getOrInsertFunction(old_name, f.getFunctionType(), f.getAttributes());
+                    llvm::Function* extern_func = cast<llvm::Function>(extern_call);
+                    extern_func->setLinkage(llvm::GlobalValue::LinkageTypes::ExternalWeakLinkage);
+                    
+                    f.replaceAllUsesWith(extern_func);
+                    
+                }
+                
                 halide_exports_unique.insert(f.getName());
+                
             }
         }
 
