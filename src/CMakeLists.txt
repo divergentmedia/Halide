@@ -12,6 +12,7 @@ set(RUNTIME_CPP
   aarch64_cpu_features
   alignment_128
   alignment_32
+  allocation_cache
   alignment_64
   android_clock
   android_host_cpu_count
@@ -174,7 +175,7 @@ function(add_runtime_modules TARGET_RUNTIME_FILES TARGET_RUNTIME_DIR)
       add_custom_command(OUTPUT "${LL_D}"
                          # COMMENT "${SOURCE} -> ${LL_D}"
                          DEPENDS "${SOURCE}"
-                         COMMAND ${CLANG} ${CXX_WARNING_FLAGS} ${RUNTIME_DEBUG_FLAG} -DDEBUG_RUNTIME -O3 -fno-ms-compatibility -ffreestanding -fno-blocks -fno-exceptions -fno-unwind-tables -std=gnu++98 -m${j} -target "${TARGET}" "-I${TARGET_RUNTIME_DIR}" -DCOMPILING_HALIDE_RUNTIME "-DLLVM_VERSION=${LLVM_VERSION}" -DBITS_${j} -emit-llvm -S "${SOURCE}" -o "${LL_D}"
+                         COMMAND ${CLANG} ${CXX_WARNING_FLAGS} ${RUNTIME_DEBUG_FLAG} -DDEBUG_RUNTIME -O3 -fno-vectorize -fpic -fno-ms-compatibility -ffreestanding -fno-blocks -fno-exceptions -fno-unwind-tables -std=gnu++98 -m${j} -target "${TARGET}" "-I${TARGET_RUNTIME_DIR}" -DCOMPILING_HALIDE_RUNTIME "-DLLVM_VERSION=${LLVM_VERSION}" -DBITS_${j} -emit-llvm -S "${SOURCE}" -o "${LL_D}"
                          # Make sure that the output of this command also depends
                          # on the header files that ${SOURCE} uses
                          # FIXME: Only works for makefile generator
@@ -183,7 +184,7 @@ function(add_runtime_modules TARGET_RUNTIME_FILES TARGET_RUNTIME_DIR)
       add_custom_command(OUTPUT "${LL}"
                          # COMMENT "${SOURCE} -> ${LL}"
                          DEPENDS "${SOURCE}"
-                         COMMAND ${CLANG} ${CXX_WARNING_FLAGS} -O3 -fno-ms-compatibility -ffreestanding -fno-blocks -fno-exceptions -fno-unwind-tables -std=gnu++98 -m${j} -target "${TARGET}" "-I${TARGET_RUNTIME_DIR}" -DCOMPILING_HALIDE_RUNTIME "-DLLVM_VERSION=${LLVM_VERSION}" -DBITS_${j} -emit-llvm -S "${SOURCE}" -o "${LL}"
+                         COMMAND ${CLANG} ${CXX_WARNING_FLAGS} -O3 -fno-vectorize -fpic -fno-ms-compatibility -ffreestanding -fno-blocks -fno-exceptions -fno-unwind-tables -std=gnu++98 -m${j} -target "${TARGET}" "-I${TARGET_RUNTIME_DIR}" -DCOMPILING_HALIDE_RUNTIME "-DLLVM_VERSION=${LLVM_VERSION}" -DBITS_${j} -emit-llvm -S "${SOURCE}" -o "${LL}"
                          )
 
       add_custom_command(OUTPUT "${BC_D}"
@@ -263,6 +264,8 @@ set(RUNTIME_HEADER_FILES
   HalideRuntimeD3D12Compute.h
   HalideRuntimeQurt.h
   HalideBuffer.h
+  HalidePyTorchHelpers.h
+  HalidePyTorchCudaHelpers.h
 )
 
 foreach (i ${RUNTIME_HEADER_FILES})
@@ -312,6 +315,7 @@ set(HEADER_FILES
   CodeGen_Posix.h
   CodeGen_PowerPC.h
   CodeGen_PTX_Dev.h
+  CodeGen_PyTorch.h
   CodeGen_RISCV.h
   CodeGen_WebAssembly.h
   CodeGen_X86.h
@@ -331,6 +335,7 @@ set(HEADER_FILES
   EarlyFree.h
   Elf.h
   EliminateBoolVectors.h
+  EmulateFloat16Math.h
   Error.h
   Expr.h
   ExprUsesVar.h
@@ -380,7 +385,6 @@ set(HEADER_FILES
   Monotonic.h
   ObjectInstanceRegistry.h
   OutputImageParam.h
-  Outputs.h
   ParallelRVar.h
   Param.h
   Parameter.h
@@ -489,6 +493,7 @@ add_library(Halide ${HALIDE_LIBRARY_TYPE}
   CodeGen_Posix.cpp
   CodeGen_PowerPC.cpp
   CodeGen_PTX_Dev.cpp
+  CodeGen_PyTorch.cpp
   CodeGen_RISCV.cpp
   CodeGen_WebAssembly.cpp
   CodeGen_X86.cpp
@@ -507,6 +512,7 @@ add_library(Halide ${HALIDE_LIBRARY_TYPE}
   EarlyFree.cpp
   Elf.cpp
   EliminateBoolVectors.cpp
+  EmulateFloat16Math.cpp
   Error.cpp
   FastIntegerDivide.cpp
   FindCalls.cpp

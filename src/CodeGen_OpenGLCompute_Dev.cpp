@@ -13,7 +13,6 @@
 namespace Halide {
 namespace Internal {
 
-using std::map;
 using std::ostringstream;
 using std::string;
 using std::vector;
@@ -292,6 +291,7 @@ void CodeGen_OpenGLCompute_Dev::CodeGen_OpenGLCompute_C::add_kernel(Stmt s,
     } else {
         stream << "#version 430\n";
     }
+    add_common_macros(stream);
     stream << "float float_from_bits(int x) { return intBitsToFloat(int(x)); }\n";
 
     for (size_t i = 0; i < args.size(); i++) {
@@ -344,7 +344,6 @@ void CodeGen_OpenGLCompute_Dev::CodeGen_OpenGLCompute_C::add_kernel(Stmt s,
 void CodeGen_OpenGLCompute_Dev::init_module() {
     src_stream.str("");
     src_stream.clear();
-    glc.add_common_macros(src_stream);
     cur_kernel_name = "";
 }
 
@@ -356,7 +355,7 @@ void CodeGen_OpenGLCompute_Dev::CodeGen_OpenGLCompute_C::visit(const Allocate *o
     alloc.type = op->type;
     allocations.push(op->name, alloc);
 
-    internal_assert(op->extents.size() >= 1);
+    internal_assert(!op->extents.empty());
     Expr extent = 1;
     for (Expr e : op->extents) {
         extent *= e;
