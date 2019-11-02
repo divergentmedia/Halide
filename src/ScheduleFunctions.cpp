@@ -1967,7 +1967,7 @@ void validate_fused_group_schedule_helper(const string &fn,
         for (int i = 0; i < n_fused; ++i) {
             const Dim &d1 = dims_1[start_fuse_1 + i];
             const Dim &d2 = dims_2[start_fuse_2 + i];
-            bool equal = var_name_match(d1.var, d2.var) &&
+            bool equal = /*var_name_match(d1.var, d2.var) &&*/
                          (d1.for_type == d2.for_type) &&
                          (d1.device_api == d2.device_api) &&
                          (d1.dim_type == d2.dim_type);
