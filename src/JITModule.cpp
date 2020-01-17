@@ -793,20 +793,25 @@ JITModule &make_module(llvm::Module *for_module, Target target,
             if (f.hasWeakLinkage()) {
                 
                 std::string extern_name = f.getName();
-                
+
                 if(searchProcessGlobalsForSymbol(extern_name)){
                     debug(1) << "Found function in process to overload extern (" << extern_name << "), mask it.\n";
-         
+
                     std::string old_name = f.getName().str(); //can't keep the stringRef since we're about to munge the backing store
-                    
+
                     f.setName(StringRef("_overloaded_") + f.getName());
-                    
-                    auto extern_call = module->getOrInsertFunction(old_name, f.getFunctionType(), f.getAttributes());
-                    llvm::Function* extern_func = cast<llvm::Function>(extern_call);
+
+                    #if LLVM_VERSION >= 90
+                            auto callee = module->getOrInsertFunction(old_name, f.getFunctionType(), f.getAttributes());
+                            llvm::Function *extern_func = dyn_cast_or_null<llvm::Function>(callee.getCallee());
+                    #else
+                            llvm::Function* extern_func = dyn_cast_or_null<llvm::Function*>(module->getOrInsertFunction(old_name, f.getFunctionType(), f.getAttributes()));
+                    #endif
+
                     extern_func->setLinkage(llvm::GlobalValue::LinkageTypes::ExternalWeakLinkage);
-                    
+
                     f.replaceAllUsesWith(extern_func);
-                    
+
                 }
                 
                 halide_exports_unique.insert(f.getName());
