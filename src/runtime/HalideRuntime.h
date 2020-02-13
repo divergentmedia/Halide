@@ -935,7 +935,7 @@ extern void halide_memoization_cache_cleanup();
  *
  * The return value should always be zero.
  */
-extern int halide_msan_check_memory_is_initialized(void *user_context, const void *ptr, uint64_t len);
+extern int halide_msan_check_memory_is_initialized(void *user_context, const void *ptr, uint64_t len, const char *name);
 
 /** Verify that the data pointed to by the halide_buffer_t is initialized (but *not* the halide_buffer_t itself),
  * using halide_msan_check_memory_is_initialized() for checking.
@@ -948,7 +948,7 @@ extern int halide_msan_check_memory_is_initialized(void *user_context, const voi
  *
  * The return value should always be zero.
  */
-extern int halide_msan_check_buffer_is_initialized(void *user_context, struct halide_buffer_t *buffer);
+extern int halide_msan_check_buffer_is_initialized(void *user_context, struct halide_buffer_t *buffer, const char *buf_name);
 
 /** Annotate that a given range of memory has been initialized;
  * only used when Target::MSAN is enabled.
@@ -1155,7 +1155,7 @@ enum halide_error_code_t {
 
     /** An expression that would perform an integer division or modulo
      * by zero was evaluated. */
-    halide_error_code_integer_division_by_zero = -44,
+    halide_error_code_device_dirty_with_no_device_support = -44,
 
 };
 
@@ -1227,7 +1227,7 @@ extern int halide_error_no_device_interface(void *user_context);
 extern int halide_error_device_interface_no_device(void *user_context);
 extern int halide_error_host_and_device_dirty(void *user_context);
 extern int halide_error_buffer_is_null(void *user_context, const char *routine);
-extern int halide_error_integer_division_by_zero(void *user_context);
+extern int halide_error_device_dirty_with_no_device_support(void *user_context, const char *buffer_name);
 // @}
 
 /** Optional features a compilation Target can have.

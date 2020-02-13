@@ -131,7 +131,16 @@ class ExtractBlockSize : public IRVisitor {
     }
 
 public:
-    int dimensions() const {
+    int blocks_dimensions() const {
+        for (int i = 0; i < 4; i++) {
+            if (!block_count[i].defined()) {
+                return i;
+            }
+        }
+        return 4;
+    }
+
+    int threads_dimensions() const {
         for (int i = 0; i < 4; i++) {
             if (!block_extent[i].defined()) {
                 return i;
@@ -176,7 +185,7 @@ class NormalizeDimensionality : public IRMutator {
         if (is_no_op(s)) {
             return s;
         }
-        while (max_depth < block_size.dimensions()) {
+        while (max_depth < block_size.threads_dimensions()) {
             string name = thread_names[max_depth];
             s = For::make("." + name, 0, 1, ForType::GPUThread, device_api, s);
             max_depth++;
@@ -234,7 +243,7 @@ class ReplaceForWithIf : public IRMutator {
                 }
             }
 
-            internal_assert(dim >= 0 && dim < block_size.dimensions());
+            internal_assert(dim >= 0 && dim < block_size.threads_dimensions());
 
             Stmt body = mutate(op->body);
 
@@ -378,6 +387,8 @@ class ExtractSharedAndHeapAllocations : public IRMutator {
         }
     }
 
+    int alloc_node_counter = 0;
+
     Stmt visit(const Allocate *op) override {
         user_assert(!op->new_expr.defined())
             << "Allocate node inside GPU kernel has custom new expression.\n"
@@ -401,7 +412,7 @@ class ExtractSharedAndHeapAllocations : public IRMutator {
             << "but is scheduled to live in " << op->memory_type << " memory.\n";
 
         SharedAllocation alloc;
-        alloc.name = op->name;
+        alloc.name = op->name + "." + std::to_string(alloc_node_counter++);
         alloc.type = op->type;
         alloc.liveness = IntInterval(barrier_stage, barrier_stage);
         alloc.size = 1;
@@ -462,7 +473,7 @@ class ExtractSharedAndHeapAllocations : public IRMutator {
             const string &prefix = name_for_memory_type(alloc->memory_type);
 
             if (device_api == DeviceAPI::OpenGLCompute) {
-                return Load::make(op->type, prefix + "_" + op->name,
+                return Load::make(op->type, prefix + "_" + alloc->name,
                                   index, op->image, op->param, predicate, op->alignment);
             } else {
                 return Load::make(op->type, prefix, index,
@@ -484,7 +495,7 @@ class ExtractSharedAndHeapAllocations : public IRMutator {
             Expr value = mutate(op->value);
             const string &prefix = name_for_memory_type(alloc->memory_type);
             if (device_api == DeviceAPI::OpenGLCompute) {
-                return Store::make(prefix + "_" + op->name, value, index,
+                return Store::make(prefix + "_" + alloc->name, value, index,
                                    op->param, predicate, op->alignment);
             } else {
                 return Store::make(prefix, value, index, op->param, predicate, ModulusRemainder());
@@ -496,12 +507,26 @@ class ExtractSharedAndHeapAllocations : public IRMutator {
 
     Stmt visit(const LetStmt *op) override {
         Expr value = mutate(op->value);
+
+        // Set aside the allocations we've found so far.
+        vector<SharedAllocation> old;
+        old.swap(allocations);
+
         Stmt body = mutate(op->body);
 
+        // Wrap let expression for any allocations found within
         for (SharedAllocation &s : allocations) {
             if (expr_uses_var(s.size, op->name)) {
-                s.size = simplify(Let::make(op->name, op->value, s.size));
+                s.size = Let::make(op->name, op->value, s.size);
+                s.size = simplify(s.size);
             }
+        }
+
+        // Add back on the allocations we set aside.
+        if (!allocations.empty()) {
+            allocations.insert(allocations.end(), old.begin(), old.end());
+        } else {
+            allocations.swap(old);
         }
 
         if (op->body.same_as(body) && value.same_as(op->value)) {
@@ -687,7 +712,7 @@ public:
                 // Remove any dependence on the block vars by taking a max
                 {
                     Scope<Interval> scope;
-                    for (int d = 0; d < bs.dimensions(); d++) {
+                    for (int d = 0; d < bs.blocks_dimensions(); d++) {
                         scope.push(bs.block_var(d).as<Variable>()->name,
                                    Interval(0, bs.num_blocks(d) - 1));
                     }
@@ -709,7 +734,7 @@ public:
                     // heap memory it's one slice of a global
                     // allocation.
                     Expr block_id = 0;
-                    for (int d = bs.dimensions() - 1; d >= 0; d--) {
+                    for (int d = bs.blocks_dimensions() - 1; d >= 0; d--) {
                         block_id *= bs.num_blocks(d);
                         block_id += bs.block_var(d);
                     }
@@ -762,7 +787,7 @@ public:
         // which were injected above if any allocation was striped
         // over the threads.
         Expr thread_id = 0, num_threads = 1;
-        for (int d = bs.dimensions() - 1; d >= 0; d--) {
+        for (int d = bs.threads_dimensions() - 1; d >= 0; d--) {
             num_threads *= bs.num_threads(d);
             thread_id *= bs.num_threads(d);
             thread_id += bs.thread_var(d);
@@ -784,7 +809,7 @@ public:
         }
 
         Expr total_size = heap_bytes_per_block;
-        for (int d = 0; d < bs.dimensions(); d++) {
+        for (int d = 0; d < bs.blocks_dimensions(); d++) {
             total_size *= bs.num_blocks(d);
         }
 
@@ -892,6 +917,9 @@ class ExtractRegisterAllocations : public IRMutator {
         }
     }
 
+    int alloc_node_counter = 0;
+    Scope<string> alloc_renaming;
+
     Stmt visit(const Allocate *op) override {
         if (in_lane_loop) {
             return IRMutator::visit(op);
@@ -908,18 +936,40 @@ class ExtractRegisterAllocations : public IRMutator {
         ScopedBinding<int> p(register_allocations, op->name, 0);
 
         RegisterAllocation alloc;
-        alloc.name = op->name;
+        alloc.name = op->name + "." + std::to_string(alloc_node_counter++);
         alloc.type = op->type;
         alloc.size = 1;
         alloc.loop_var = loop_var;
         for (size_t i = 0; i < op->extents.size(); i++) {
             alloc.size *= op->extents[i];
         }
-        alloc.size = simplify(alloc.size);
+        alloc.size = simplify(mutate(alloc.size));
         alloc.memory_type = op->memory_type;
 
         allocations.push_back(alloc);
-        return mutate(op->body);
+        {
+            ScopedBinding<string> bind(alloc_renaming, op->name, alloc.name);
+            return mutate(op->body);
+        }
+    }
+
+    Expr visit(const Load *op) override {
+        string new_name = op->name;
+        if (alloc_renaming.contains(op->name)) {
+            new_name = alloc_renaming.get(op->name);
+        }
+        return Load::make(op->type, new_name, mutate(op->index),
+                          op->image, op->param, mutate(op->predicate),
+                          op->alignment);
+    }
+
+    Stmt visit(const Store *op) override {
+        string new_name = op->name;
+        if (alloc_renaming.contains(op->name)) {
+            new_name = alloc_renaming.get(op->name);
+        }
+        return Store::make(new_name, mutate(op->value), mutate(op->index),
+                           op->param, mutate(op->predicate), op->alignment);
     }
 
     template<typename ExprOrStmt, typename LetOrLetStmt>
@@ -927,17 +977,18 @@ class ExtractRegisterAllocations : public IRMutator {
         ExprOrStmt body = op->body;
 
         body = mutate(op->body);
+        Expr value = mutate(op->value);
 
         for (RegisterAllocation &s : allocations) {
             if (expr_uses_var(s.size, op->name)) {
-                s.size = simplify(Let::make(op->name, op->value, s.size));
+                s.size = simplify(Let::make(op->name, value, s.size));
             }
         }
 
-        if (op->body.same_as(body)) {
+        if (op->body.same_as(body) && op->value.same_as(value)) {
             return op;
         } else {
-            return LetOrLetStmt::make(op->name, op->value, body);
+            return LetOrLetStmt::make(op->name, value, body);
         }
     }
 
@@ -988,10 +1039,10 @@ class FuseGPUThreadLoopsSingleKernel : public IRMutator {
             debug(3) << "Normalized dimensionality:\n"
                      << body << "\n\n";
 
-            Expr block_size_x = block_size.dimensions() ? block_size.num_threads(0) : 1;
+            Expr block_size_x = block_size.threads_dimensions() ? block_size.num_threads(0) : 1;
             ExtractRegisterAllocations register_allocs;
             ForType innermost_loop_type = ForType::GPUThread;
-            if (block_size.dimensions()) {
+            if (block_size.threads_dimensions()) {
                 body = register_allocs.mutate(body);
                 if (register_allocs.has_lane_loop) {
                     innermost_loop_type = ForType::GPULane;
@@ -1023,7 +1074,7 @@ class FuseGPUThreadLoopsSingleKernel : public IRMutator {
             body = For::make(thread_id, 0, block_size_x, innermost_loop_type, op->device_api, body);
 
             // Rewrap the whole thing in other loops over threads
-            for (int i = 1; i < block_size.dimensions(); i++) {
+            for (int i = 1; i < block_size.threads_dimensions(); i++) {
                 thread_id = "." + thread_names[i];
                 body = register_allocs.rewrap(body, thread_id);
                 body = For::make("." + thread_names[i], 0, block_size.num_threads(i),

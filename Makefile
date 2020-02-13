@@ -18,12 +18,12 @@ UNAME = $(shell uname)
 
 ifeq ($(OS), Windows_NT)
     # assume we are building for the MinGW environment
-    COMMON_LD_FLAGS=-luuid -lole32 -lpthread -lz -Wl,--stack,8388608
+    COMMON_LD_FLAGS=$(LDFLAGS) -luuid -lole32 -lpthread -lz -Wl,--stack,8388608
     SHARED_EXT=dll
     FPIC=
 else
     # let's assume "normal" UNIX such as linux
-    COMMON_LD_FLAGS=-ldl -lpthread -lz
+    COMMON_LD_FLAGS=$(LDFLAGS) -ldl -lpthread -lz
     FPIC=-fPIC
 ifeq ($(UNAME), Darwin)
     SHARED_EXT=dylib
@@ -236,7 +236,7 @@ ifneq (,$(findstring clang,$(CXX_VERSION)))
 LLVM_CXX_FLAGS_LIBCPP := $(findstring -stdlib=libc++, $(LLVM_CXX_FLAGS))
 endif
 
-CXX_FLAGS = $(CXX_WARNING_FLAGS) $(RTTI_CXX_FLAGS) -Woverloaded-virtual $(FPIC) $(OPTIMIZE) -fno-omit-frame-pointer -DCOMPILING_HALIDE
+CXX_FLAGS = $(CXXFLAGS) $(CXX_WARNING_FLAGS) $(RTTI_CXX_FLAGS) -Woverloaded-virtual $(FPIC) $(OPTIMIZE) -fno-omit-frame-pointer -DCOMPILING_HALIDE
 
 CXX_FLAGS += $(LLVM_CXX_FLAGS)
 CXX_FLAGS += $(PTX_CXX_FLAGS)
@@ -444,9 +444,9 @@ HEXAGON_RUNTIME_LIBS = \
   $(HEXAGON_RUNTIME_LIBS_DIR)/arm-32-android/libhalide_hexagon_host.so \
   $(HEXAGON_RUNTIME_LIBS_DIR)/arm-64-android/libhalide_hexagon_host.so \
   $(HEXAGON_RUNTIME_LIBS_DIR)/host/libhalide_hexagon_host.so \
-  $(HEXAGON_RUNTIME_LIBS_DIR)/v60/hexagon_sim_remote \
-  $(HEXAGON_RUNTIME_LIBS_DIR)/v60/libhalide_hexagon_remote_skel.so \
-  $(HEXAGON_RUNTIME_LIBS_DIR)/v60/signed_by_debug/libhalide_hexagon_remote_skel.so
+  $(HEXAGON_RUNTIME_LIBS_DIR)/v62/hexagon_sim_remote \
+  $(HEXAGON_RUNTIME_LIBS_DIR)/v62/libhalide_hexagon_remote_skel.so \
+  $(HEXAGON_RUNTIME_LIBS_DIR)/v62/signed_by_debug/libhalide_hexagon_remote_skel.so
 
 # Keep this list sorted in alphabetical order.
 SOURCE_FILES = \
@@ -958,17 +958,41 @@ endif
 .PHONY: all
 all: distrib test_internal
 
+# Depending on which linker we're using,
+# we need a different invocation to get the
+# linker map file.
+ifeq ($(UNAME), Darwin)
+    MAP_FLAGS= -Wl,-map -Wl,$(BUILD_DIR)/llvm_objects/list.all
+    LIST_OUTPUT = > /dev/null
+else
+ifeq ($(OS), Windows_NT)
+    # This is for MinGW: the map file gets written, but the
+    # compilation fails with a file truncation error.  Instead,
+    # we use the old strategy.
+    # Note: we do in fact have to pass in this flag twice.
+    # Note: The grep in this line is necessary in order to avoid file truncation errors
+    # in MinGW.
+    MAP_FLAGS= -Wl,-t -Wl,-t
+    LIST_OUTPUT = 2>&1 | grep "libLLVM" | grep ")" > $(BUILD_DIR)/llvm_objects/list.all
+else
+    MAP_FLAGS= -Wl,-Map=$(BUILD_DIR)/llvm_objects/list.all
+    LIST_OUTPUT = > /dev/null
+endif
+endif
+
 $(BUILD_DIR)/llvm_objects/list: $(OBJECTS) $(INITIAL_MODULES)
 	# Determine the relevant object files from llvm with a dummy
-	# compilation. Passing -t to the linker gets it to list which
-	# object files in which archives it uses to resolve
-	# symbols. We only care about the libLLVM ones.
+	# compilation. Passing -map to the linker gets it to list, as
+	# part of the linker map file, the object files in which archives it uses to
+	# resolve symbols. We only care about the libLLVM ones, which we will filter below.
 	@mkdir -p $(@D)
-	$(CXX) -o /dev/null -shared -Wl,-t -Wl,-t $(OBJECTS) $(INITIAL_MODULES) $(LLVM_STATIC_LIBS) $(LLVM_SYSTEM_LIBS) $(COMMON_LD_FLAGS) 2>&1 | grep "libLLVM" | grep ")" > $(BUILD_DIR)/llvm_objects/list.new
+	$(CXX) -o /dev/null -shared $(MAP_FLAGS) $(OBJECTS) $(INITIAL_MODULES) $(LLVM_STATIC_LIBS) $(LLVM_SYSTEM_LIBS) $(COMMON_LD_FLAGS)  $(LIST_OUTPUT)
 	# if the list has changed since the previous build, or there
 	# is no list from a previous build, then delete any old object
 	# files and re-extract the required object files
 	cd $(BUILD_DIR)/llvm_objects; \
+	cat list.all |  grep "libLLVM" | grep ")"  | sed "s/\[.*\] //" | egrep "^/|^\(" > list.new; \
+	rm list.all; \
 	if cmp -s list.new list; \
 	then \
 	echo "No changes in LLVM deps"; \
@@ -1787,7 +1811,7 @@ $(FILTERS_DIR)/multi_rungen2: $(BUILD_DIR)/RunGenMain.o $(BIN_DIR)/$(TARGET)/run
 	@mkdir -p $(@D)
 	$(CXX) -std=c++11 -I$(FILTERS_DIR) $^ $(GEN_AOT_LD_FLAGS) $(IMAGE_IO_LIBS) -o $@
 
-$(BIN_DIR)/tutorial_%: $(ROOT_DIR)/tutorial/%.cpp $(BIN_DIR)/libHalide.$(SHARED_EXT) $(INCLUDE_DIR)/Halide.h
+$(BIN_DIR)/tutorial_%: $(ROOT_DIR)/tutorial/%.cpp $(BIN_DIR)/libHalide.$(SHARED_EXT) $(INCLUDE_DIR)/Halide.h $(INCLUDE_DIR)/HalideRuntime.h
 	@ if [[ $@ == *_run ]]; then \
 		export TUTORIAL=$* ;\
 		export LESSON=`echo $${TUTORIAL} | cut -b1-9`; \
@@ -1985,6 +2009,16 @@ ifneq ($(OS), Windows_NT)
 endif
 
 TEST_APPS_DEPS=$(TEST_APPS:%=%_test_app)
+BUILD_APPS_DEPS=$(TEST_APPS:%=%_build_app)
+
+$(BUILD_APPS_DEPS): distrib build_python_bindings
+	@echo Building app $(@:%_build_app=%) for ${HL_TARGET}...
+	@$(MAKE) -C $(ROOT_DIR)/apps/$(@:%_build_app=%) build \
+		HALIDE_DISTRIB_PATH=$(CURDIR)/$(DISTRIB_DIR) \
+		HALIDE_PYTHON_BINDINGS_PATH=$(CURDIR)/$(BIN_DIR)/python3_bindings \
+		BIN_DIR=$(CURDIR)/$(BIN_DIR)/apps/$(@:%_build_app=%)/bin \
+		HL_TARGET=$(HL_TARGET) \
+		|| exit 1 ; \
 
 $(TEST_APPS_DEPS): distrib build_python_bindings
 	@echo Testing app $(@:%_test_app=%) for ${HL_TARGET}...
@@ -1995,8 +2029,9 @@ $(TEST_APPS_DEPS): distrib build_python_bindings
 		HL_TARGET=$(HL_TARGET) \
 		|| exit 1 ; \
 
-.PHONY: test_apps $(TEST_APPS_DEPS)
-test_apps: $(TEST_APPS_DEPS)
+.PHONY: test_apps $(BUILD_APPS_DEPS)
+test_apps: $(BUILD_APPS_DEPS)
+	$(MAKE) -f $(THIS_MAKEFILE) -j1 $(TEST_APPS_DEPS)
 
 BENCHMARK_APPS=\
 	bilateral_grid \
@@ -2103,6 +2138,10 @@ ifneq (,$(findstring clang version 10.0,$(CLANG_VERSION)))
 CLANG_OK=yes
 endif
 
+ifneq (,$(findstring clang version 11.0,$(CLANG_VERSION)))
+CLANG_OK=yes
+endif
+
 ifneq (,$(findstring Apple LLVM version 5.0,$(CLANG_VERSION)))
 CLANG_OK=yes
 endif
@@ -2123,7 +2162,7 @@ $(BUILD_DIR)/clang_ok:
 	@exit 1
 endif
 
-ifneq (,$(findstring $(LLVM_VERSION_TIMES_10), 80 90 100))
+ifneq (,$(findstring $(LLVM_VERSION_TIMES_10), 80 90 100 110))
 LLVM_OK=yes
 endif
 
@@ -2198,15 +2237,15 @@ endif
 
 # This is a specialized 'install' for users who need Hexagon support libraries as well.
 install_qc: install $(HEXAGON_RUNTIME_LIBS)
-	mkdir -p $(PREFIX)/lib/arm-32-android $(PREFIX)/lib/arm-64-android $(PREFIX)/lib/host $(PREFIX)/lib/v60 $(PREFIX)/tools
+	mkdir -p $(PREFIX)/lib/arm-32-android $(PREFIX)/lib/arm-64-android $(PREFIX)/lib/host $(PREFIX)/lib/v62 $(PREFIX)/tools
 	cp $(HEXAGON_RUNTIME_LIBS_DIR)/arm-32-android/* $(PREFIX)/lib/arm-32-android
 	cp $(HEXAGON_RUNTIME_LIBS_DIR)/arm-64-android/* $(PREFIX)/lib/arm-64-android
 	cp $(HEXAGON_RUNTIME_LIBS_DIR)/host/* $(PREFIX)/lib/host
-	cp -r $(HEXAGON_RUNTIME_LIBS_DIR)/v60/* $(PREFIX)/lib/v60
+	cp -r $(HEXAGON_RUNTIME_LIBS_DIR)/v62/* $(PREFIX)/lib/v62
 	ln -sf $(PREFIX)/share/halide/tools/GenGen.cpp $(PREFIX)/tools/GenGen.cpp
-	ln -sf $(PREFIX)/lib/v60/hexagon_sim_remote $(PREFIX)/bin/hexagon_sim_remote
-	ln -sf $(PREFIX)/lib/v60/libsim_qurt.a $(PREFIX)/lib/libsim_qurt.a
-	ln -sf $(PREFIX)/lib/v60/libsim_qurt_vtcm.a $(PREFIX)/lib/libsim_qurt_vtcm.a
+	ln -sf $(PREFIX)/lib/v62/hexagon_sim_remote $(PREFIX)/bin/hexagon_sim_remote
+	ln -sf $(PREFIX)/lib/v62/libsim_qurt.a $(PREFIX)/lib/libsim_qurt.a
+	ln -sf $(PREFIX)/lib/v62/libsim_qurt_vtcm.a $(PREFIX)/lib/libsim_qurt_vtcm.a
 
 # We need to capture the system libraries that we'll need to link
 # against, so that downstream consumers of our build rules don't

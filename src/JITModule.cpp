@@ -814,7 +814,7 @@ JITModule &make_module(llvm::Module *for_module, Target target,
 
                 }
                 
-                halide_exports_unique.insert(f.getName());
+                halide_exports_unique.insert(get_llvm_function_name(f));
                 
             }
         }
