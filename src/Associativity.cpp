@@ -450,6 +450,7 @@ AssociativeOp prove_associativity(const string &f, vector<Expr> args, vector<Exp
     }
 
     assoc_op.is_associative = true;
+    assoc_op.pattern.is_commutative = true;
     debug(5) << "Found associative ops:\n"
              << assoc_op << "\n";
     return assoc_op;
