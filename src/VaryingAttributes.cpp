@@ -2,10 +2,11 @@
 
 #include <algorithm>
 
-#include "CodeGen_GPU_Dev.h"
-
 #include "CSE.h"
+#include "CodeGen_GPU_Dev.h"
+#include "IR.h"
 #include "IRMutator.h"
+#include "IROperator.h"
 #include "Simplify.h"
 
 namespace Halide {
@@ -33,7 +34,7 @@ class FindLinearExpressions : public IRMutator {
 protected:
     using IRMutator::visit;
 
-    bool in_glsl_loops;
+    bool in_glsl_loops = false;
 
     Expr tag_linear_expression(Expr e, const std::string &name = unique_name('a')) {
 
@@ -401,21 +402,19 @@ public:
     unsigned int order;
     bool found;
 
-    unsigned int total_found;
+    unsigned int total_found = 0;
 
     // This parameter controls the maximum number of linearly varying
     // expressions halide will pull out of the fragment shader and evaluate per
     // vertex, and allow the GPU to linearly interpolate across the domain. For
     // OpenGL ES 2.0 we can pass 16 vec4 varying attributes, or 64 scalars. Two
     // scalar slots are used by boilerplate code to pass pixel coordinates.
-    const unsigned int max_expressions;
+    const unsigned int max_expressions = 62;
 
-    FindLinearExpressions()
-        : in_glsl_loops(false), total_found(0), max_expressions(62) {
-    }
+    FindLinearExpressions() = default;
 };
 
-Stmt find_linear_expressions(Stmt s) {
+Stmt find_linear_expressions(const Stmt &s) {
 
     return FindLinearExpressions().mutate(s);
 }
@@ -456,7 +455,7 @@ public:
     }
 };
 
-Stmt remove_varying_attributes(Stmt s) {
+Stmt remove_varying_attributes(const Stmt &s) {
     return RemoveVaryingAttributeTags().mutate(s);
 }
 
@@ -483,7 +482,7 @@ public:
     }
 };
 
-Stmt replace_varying_attributes(Stmt s) {
+Stmt replace_varying_attributes(const Stmt &s) {
     return ReplaceVaryingAttributeTags().mutate(s);
 }
 
@@ -504,13 +503,13 @@ public:
 
 // Remove varying attributes from the varying's map if they do not appear in the
 // loop_stmt because they were simplified away.
-void prune_varying_attributes(Stmt loop_stmt, std::map<std::string, Expr> &varying) {
+void prune_varying_attributes(const Stmt &loop_stmt, std::map<std::string, Expr> &varying) {
     FindVaryingAttributeVars find;
     loop_stmt.accept(&find);
 
     std::vector<std::string> remove_list;
 
-    for (const std::pair<std::string, Expr> &i : varying) {
+    for (const std::pair<const std::string, Expr> &i : varying) {
         const std::string &name = i.first;
         if (find.variables.find(name) == find.variables.end()) {
             debug(2) << "Removed varying attribute " << name << "\n";
@@ -576,7 +575,7 @@ protected:
         }
     }
 
-    Type float_type(Expr e) {
+    Type float_type(const Expr &e) {
         return Float(e.type().bits(), e.type().lanes());
     }
 
@@ -973,17 +972,20 @@ void IRFilter::visit(const Allocate *op) {
     stmt = Stmt();
     for (size_t i = 0; i < op->extents.size(); i++) {
         Stmt new_extent = mutate(op->extents[i]);
-        if (new_extent.defined())
+        if (new_extent.defined()) {
             stmt = make_block(new_extent, stmt);
+        }
     }
 
     Stmt body = mutate(op->body);
-    if (body.defined())
+    if (body.defined()) {
         stmt = make_block(body, stmt);
+    }
 
     Stmt condition = mutate(op->condition);
-    if (condition.defined())
+    if (condition.defined()) {
         stmt = make_block(condition, stmt);
+    }
 }
 
 void IRFilter::visit(const Free *op) {
@@ -999,19 +1001,23 @@ void IRFilter::visit(const Realize *op) {
         Stmt new_min = mutate(old_min);
         Stmt new_extent = mutate(old_extent);
 
-        if (new_min.defined())
+        if (new_min.defined()) {
             stmt = make_block(new_min, stmt);
-        if (new_extent.defined())
+        }
+        if (new_extent.defined()) {
             stmt = make_block(new_extent, stmt);
+        }
     }
 
     Stmt body = mutate(op->body);
-    if (body.defined())
+    if (body.defined()) {
         stmt = make_block(body, stmt);
+    }
 
     Stmt condition = mutate(op->condition);
-    if (condition.defined())
+    if (condition.defined()) {
         stmt = make_block(condition, stmt);
+    }
 }
 
 void IRFilter::visit(const Block *op) {
@@ -1219,7 +1225,7 @@ public:
 // from removing the variables or substituting in their constant
 // values.
 
-Expr dont_simplify(Expr v_) {
+Expr dont_simplify(const Expr &v_) {
     return Internal::Call::make(v_.type(),
                                 Internal::Call::return_second,
                                 {0, v_},
@@ -1262,7 +1268,7 @@ public:
             attribute_order["__vertex_y"] = 1;
 
             int idx = 2;
-            for (const std::pair<std::string, Expr> &v : varyings) {
+            for (const std::pair<const std::string, Expr> &v : varyings) {
                 attribute_order[v.first] = idx++;
             }
 
@@ -1356,7 +1362,7 @@ public:
     }
 };
 
-Stmt setup_gpu_vertex_buffer(Stmt s) {
+Stmt setup_gpu_vertex_buffer(const Stmt &s) {
     CreateVertexBufferHostLoops vb;
     return vb.mutate(s);
 }

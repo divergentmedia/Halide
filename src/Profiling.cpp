@@ -122,7 +122,7 @@ private:
         // inject_profiling() so this is a possible scenario.
         if (!is_zero(size) && on_stack) {
             const uint64_t *int_size = as_const_uint(size);
-            internal_assert(int_size != NULL);  // Stack size is always a const int
+            internal_assert(int_size != nullptr);  // Stack size is always a const int
             func_stack_current[idx] += *int_size;
             func_stack_peak[idx] = std::max(func_stack_peak[idx], func_stack_current[idx]);
             debug(3) << "  Allocation on stack: " << op->name << "(" << size << ") in pipeline " << pipeline_name
@@ -225,7 +225,7 @@ private:
                                          {state}, Call::Extern));
     }
 
-    Stmt visit_parallel_task(Stmt s) {
+    Stmt visit_parallel_task(const Stmt &s) {
         if (const Fork *f = s.as<Fork>()) {
             return Fork::make(visit_parallel_task(f->first), visit_parallel_task(f->rest));
         } else if (const Acquire *a = s.as<Acquire>()) {
@@ -292,7 +292,7 @@ private:
     }
 };
 
-Stmt inject_profiling(Stmt s, string pipeline_name) {
+Stmt inject_profiling(Stmt s, const string &pipeline_name) {
     InjectProfiling profiling(pipeline_name);
     s = profiling.mutate(s);
 
@@ -351,7 +351,7 @@ Stmt inject_profiling(Stmt s, string pipeline_name) {
                            MemoryType::Auto, {num_funcs}, const_true(), s);
     }
 
-    for (std::pair<string, int> p : profiling.indices) {
+    for (const auto &p : profiling.indices) {
         s = Block::make(Store::make("profiling_func_names", p.first, p.second, Parameter(), const_true(), ModulusRemainder()), s);
     }
 

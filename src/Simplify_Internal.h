@@ -90,9 +90,11 @@ public:
         }
     };
 
-#if LOG_EXPR_MUTATIONS
+#if (LOG_EXPR_MUTATORIONS || LOG_STMT_MUTATIONS)
     static int debug_indent;
+#endif
 
+#if LOG_EXPR_MUTATIONS
     Expr mutate(const Expr &e, ExprInfo *b) {
         const std::string spaces(debug_indent, ' ');
         debug(1) << spaces << "Simplifying Expr: " << e << "\n";
@@ -141,7 +143,7 @@ public:
     bool no_float_simplify;
 
     HALIDE_ALWAYS_INLINE
-    bool may_simplify(const Type &t) {
+    bool may_simplify(const Type &t) const {
         return !no_float_simplify || !t.is_float();
     }
 
@@ -184,6 +186,13 @@ public:
     IRMatcher::WildConst<1> c1;
     IRMatcher::WildConst<2> c2;
     IRMatcher::WildConst<3> c3;
+    IRMatcher::WildConst<4> c4;
+    IRMatcher::WildConst<5> c5;
+
+    // Tracks whether or not we're inside a vector loop. Certain
+    // transformations are not a good idea if the code is to be
+    // vectorized.
+    bool in_vector_loop = false;
 
     // If we encounter a reference to a buffer (a Load, Store, Call,
     // or Provide), there's an implicit dependence on some associated
@@ -201,8 +210,12 @@ public:
     // Put the args to a commutative op in a canonical order
     HALIDE_ALWAYS_INLINE
     bool should_commute(const Expr &a, const Expr &b) {
-        if (a.node_type() < b.node_type()) return true;
-        if (a.node_type() > b.node_type()) return false;
+        if (a.node_type() < b.node_type()) {
+            return true;
+        }
+        if (a.node_type() > b.node_type()) {
+            return false;
+        }
 
         if (a.node_type() == IRNodeType::Variable) {
             const Variable *va = a.as<Variable>();
@@ -256,10 +269,10 @@ public:
     template<typename T>
     Expr hoist_slice_vector(Expr e);
 
-    Stmt mutate_let_body(Stmt s, ExprInfo *) {
+    Stmt mutate_let_body(const Stmt &s, ExprInfo *) {
         return mutate(s);
     }
-    Expr mutate_let_body(Expr e, ExprInfo *bounds) {
+    Expr mutate_let_body(const Expr &e, ExprInfo *bounds) {
         return mutate(e, bounds);
     }
 
@@ -295,6 +308,7 @@ public:
     Expr visit(const Load *op, ExprInfo *bounds);
     Expr visit(const Call *op, ExprInfo *bounds);
     Expr visit(const Shuffle *op, ExprInfo *bounds);
+    Expr visit(const VectorReduce *op, ExprInfo *bounds);
     Expr visit(const Let *op, ExprInfo *bounds);
     Stmt visit(const LetStmt *op);
     Stmt visit(const AssertStmt *op);

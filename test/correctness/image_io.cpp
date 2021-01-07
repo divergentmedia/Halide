@@ -1,8 +1,8 @@
-#include <fstream>
-
 #include "Halide.h"
 #include "halide_image_io.h"
-#include "test/common/halide_test_dirs.h"
+#include "halide_test_dirs.h"
+
+#include <fstream>
 
 using namespace Halide;
 
@@ -237,7 +237,7 @@ void test_mat_header() {
     Tools::save_image(buf, filename);
     std::ifstream fs(filename.c_str(), std::ifstream::binary);
     if (!fs) {
-        std::cout << "Cannot read " << filename << std::endl;
+        std::cout << "Cannot read " << filename << "\n";
         abort();
     }
     fs.seekg(0, fs.end);
@@ -250,7 +250,7 @@ void test_mat_header() {
     fs.read((char *)&stored_file_size, 4);
     fs.close();
     if (file_size != stored_file_size) {
-        std::cout << "Wrong file size written for " << filename << ". Expected " << file_size << ", got" << stored_file_size << std::endl;
+        std::cout << "Wrong file size written for " << filename << ". Expected " << file_size << ", got" << stored_file_size << "\n";
         abort();
     }
 }
@@ -259,5 +259,6 @@ int main(int argc, char **argv) {
     do_test<uint8_t>();
     do_test<uint16_t>();
     test_mat_header();
+    printf("Success!\n");
     return 0;
 }

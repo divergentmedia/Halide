@@ -2,7 +2,8 @@
 #define SIMD_OP_CHECK_H
 
 #include "Halide.h"
-#include "test/common/halide_test_dirs.h"
+#include "halide_test_dirs.h"
+
 #include <fstream>
 
 namespace Halide {
@@ -77,7 +78,7 @@ public:
                                   Target::AVX2, Target::AVX512,
                                   Target::FMA, Target::FMA4, Target::F16C,
                                   Target::VSX, Target::POWER_ARCH_2_07,
-                                  Target::ARMv7s, Target::NoNEON, Target::MinGW,
+                                  Target::ARMv7s, Target::NoNEON,
                                   Target::WasmSimd128}) {
             if (target.has_feature(f) != host_target.has_feature(f)) {
                 can_run_the_code = false;
@@ -129,6 +130,25 @@ public:
     TestResult check_one(const std::string &op, const std::string &name, int vector_width, Expr e) {
         std::ostringstream error_msg;
 
+        class HasInlineReduction : public Internal::IRVisitor {
+            using Internal::IRVisitor::visit;
+            void visit(const Internal::Call *op) override {
+                if (op->call_type == Internal::Call::Halide) {
+                    Internal::Function f(op->func);
+                    if (f.has_update_definition()) {
+                        inline_reduction = f;
+                        result = true;
+                    }
+                }
+                IRVisitor::visit(op);
+            }
+
+        public:
+            Internal::Function inline_reduction;
+            bool result = false;
+        } has_inline_reduction;
+        e.accept(&has_inline_reduction);
+
         // Define a vectorized Halide::Func that uses the pattern.
         Halide::Func f(name);
         f(x, y) = e;
@@ -141,10 +161,28 @@ public:
         f_scalar.bound(x, 0, W);
         f_scalar.compute_root();
 
+        if (has_inline_reduction.result) {
+            // If there's an inline reduction, we want to vectorize it
+            // over the RVar.
+            Var xo, xi;
+            RVar rxi;
+            Func g{has_inline_reduction.inline_reduction};
+
+            // Do the reduction separately in f_scalar
+            g.clone_in(f_scalar);
+
+            g.compute_at(f, x)
+                .update()
+                .split(x, xo, xi, vector_width)
+                .fuse(g.rvars()[0], xi, rxi)
+                .atomic()
+                .vectorize(rxi);
+        }
+
         // The output to the pipeline is the maximum absolute difference as a double.
-        RDom r(0, W, 0, H);
+        RDom r_check(0, W, 0, H);
         Halide::Func error("error_" + name);
-        error() = Halide::cast<double>(maximum(absd(f(r.x, r.y), f_scalar(r.x, r.y))));
+        error() = Halide::cast<double>(maximum(absd(f(r_check.x, r_check.y), f_scalar(r_check.x, r_check.y))));
 
         setup_images();
         {
@@ -186,8 +224,7 @@ public:
                                     .without_feature(Target::NoAsserts)
                                     .without_feature(Target::NoBoundsQuery);
 
-            error.compile_jit(run_target);
-            error.infer_input_bounds();
+            error.infer_input_bounds({}, run_target);
             // Fill the inputs with noise
             std::mt19937 rng(123);
             for (auto p : image_params) {
