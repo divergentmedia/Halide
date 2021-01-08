@@ -16,6 +16,1061 @@ default_target: all
 # Disable implicit rules so canonical targets will work.
 .SUFFIXES:
 
+<<<<<<< HEAD
+=======
+UNAME = $(shell uname)
+
+ifeq ($(OS), Windows_NT)
+    $(error Halide no longer supports the MinGW environment. Please use MSVC through CMake instead.)
+else
+    # let's assume "normal" UNIX such as linux
+    COMMON_LD_FLAGS=$(LDFLAGS) -ldl -lpthread -lz
+    FPIC=-fPIC
+ifeq ($(UNAME), Darwin)
+    SHARED_EXT=dylib
+else
+    SHARED_EXT=so
+endif
+endif
+
+ifeq ($(UNAME), Darwin)
+  # Anything that we us install_name_tool on needs these linker flags
+  # to ensure there is enough padding for install_name_tool to use
+  INSTALL_NAME_TOOL_LD_FLAGS=-Wl,-headerpad_max_install_names
+else
+  INSTALL_NAME_TOOL_LD_FLAGS=
+endif
+
+ifeq ($(UNAME), Darwin)
+define alwayslink
+	-Wl,-force_load,$(1)
+endef
+else
+define alwayslink
+	-Wl,--whole-archive $(1) -Wl,-no-whole-archive
+endef
+endif
+
+SHELL = bash
+CXX ?= g++
+PREFIX ?= /usr/local
+LLVM_CONFIG ?= llvm-config
+LLVM_COMPONENTS= $(shell $(LLVM_CONFIG) --components)
+LLVM_VERSION = $(shell $(LLVM_CONFIG) --version | sed 's/\([0-9][0-9]*\)\.\([0-9]\).*/\1.\2/')
+
+LLVM_FULL_VERSION = $(shell $(LLVM_CONFIG) --version)
+LLVM_BINDIR = $(shell $(LLVM_CONFIG) --bindir | sed -e 's/\\/\//g' -e 's/\([a-zA-Z]\):/\/\1/g')
+LLVM_LIBDIR = $(shell $(LLVM_CONFIG) --libdir | sed -e 's/\\/\//g' -e 's/\([a-zA-Z]\):/\/\1/g')
+# Apparently there is no llvm_config flag to get canonical paths to tools,
+# so we'll just construct one relative to --src-root and hope that is stable everywhere.
+LLVM_GIT_LLD_INCLUDE_DIR = $(shell $(LLVM_CONFIG) --src-root | sed -e 's/\\/\//g' -e 's/\([a-zA-Z]\):/\/\1/g')/../lld/include
+LLVM_SYSTEM_LIBS=$(shell ${LLVM_CONFIG} --system-libs --link-static | sed -e 's/[\/&]/\\&/g')
+LLVM_AS = $(LLVM_BINDIR)/llvm-as
+LLVM_NM = $(LLVM_BINDIR)/llvm-nm
+LLVM_CXX_FLAGS = -std=c++11  $(filter-out -O% -g -fomit-frame-pointer -pedantic -W% -W, $(shell $(LLVM_CONFIG) --cxxflags | sed -e 's/\\/\//g' -e 's/\([a-zA-Z]\):/\/\1/g;s/-D/ -D/g;s/-O/ -O/g')) -I$(LLVM_GIT_LLD_INCLUDE_DIR)
+OPTIMIZE ?= -O3
+OPTIMIZE_FOR_BUILD_TIME ?= -O0
+
+PYTHON ?= python3
+
+CLANG ?= $(LLVM_BINDIR)/clang
+CLANG_VERSION = $(shell $(CLANG) --version)
+
+SANITIZER_FLAGS ?=
+
+# TODO: this is suboptimal hackery; we should really add the relevant
+# support libs for the sanitizer(s) as weak symbols in Codegen_LLVM.
+# (Note also that, in general, most Sanitizers work most reliably with an all-Clang
+# build system.)
+
+ifneq (,$(findstring tsan,$(HL_TARGET)$(HL_JIT_TARGET)))
+
+# Note that attempting to use TSAN with the JIT can produce false positives
+# if libHalide is not also compiled with TSAN enabled; we tack the relevant
+# flag onto OPTIMIZE here, but that's really only effective if you ensure
+# to do a clean build before testing. (In general, most of the Sanitizers
+# only work well when used in a completely clean environment.)
+OPTIMIZE += -fsanitize=thread
+SANITIZER_FLAGS += -fsanitize=thread
+
+endif
+
+ifneq (,$(findstring asan,$(HL_TARGET)$(HL_JIT_TARGET)))
+OPTIMIZE += -fsanitize=address
+SANITIZER_FLAGS += -fsanitize=address
+endif
+
+COMMON_LD_FLAGS += $(SANITIZER_FLAGS)
+
+LLVM_VERSION_TIMES_10 = $(shell $(LLVM_CONFIG) --version | sed 's/\([0-9][0-9]*\)\.\([0-9]\).*/\1\2/')
+
+LLVM_CXX_FLAGS += -DLLVM_VERSION=$(LLVM_VERSION_TIMES_10)
+
+# All WITH_* flags are either empty or not-empty. They do not behave
+# like true/false values in most languages.  To turn one off, either
+# edit this file, add "WITH_FOO=" (no assigned value) to the make
+# line, or define an environment variable WITH_FOO that has an empty
+# value.
+WITH_X86 ?= $(findstring x86, $(LLVM_COMPONENTS))
+WITH_ARM ?= $(findstring arm, $(LLVM_COMPONENTS))
+WITH_HEXAGON ?= $(findstring hexagon, $(LLVM_COMPONENTS))
+WITH_MIPS ?= $(findstring mips, $(LLVM_COMPONENTS))
+WITH_RISCV ?= $(findstring riscv, $(LLVM_COMPONENTS))
+WITH_AARCH64 ?= $(findstring aarch64, $(LLVM_COMPONENTS))
+WITH_POWERPC ?= $(findstring powerpc, $(LLVM_COMPONENTS))
+WITH_NVPTX ?= $(findstring nvptx, $(LLVM_COMPONENTS))
+WITH_WEBASSEMBLY ?= $(findstring webassembly, $(LLVM_COMPONENTS))
+# AMDGPU target is WIP
+WITH_AMDGPU ?= $(findstring amdgpu, $(LLVM_COMPONENTS))
+WITH_OPENCL ?= not-empty
+WITH_METAL ?= not-empty
+WITH_OPENGL ?= not-empty
+WITH_D3D12 ?= not-empty
+WITH_INTROSPECTION ?= not-empty
+WITH_EXCEPTIONS ?=
+WITH_LLVM_INSIDE_SHARED_LIBHALIDE ?= not-empty
+
+
+# If HL_TARGET or HL_JIT_TARGET aren't set, use host
+HL_TARGET ?= host
+HL_JIT_TARGET ?= host
+
+X86_CXX_FLAGS=$(if $(WITH_X86), -DWITH_X86, )
+X86_LLVM_CONFIG_LIB=$(if $(WITH_X86), x86, )
+
+ARM_CXX_FLAGS=$(if $(WITH_ARM), -DWITH_ARM, )
+ARM_LLVM_CONFIG_LIB=$(if $(WITH_ARM), arm, )
+
+MIPS_CXX_FLAGS=$(if $(WITH_MIPS), -DWITH_MIPS, )
+MIPS_LLVM_CONFIG_LIB=$(if $(WITH_MIPS), mips, )
+
+POWERPC_CXX_FLAGS=$(if $(WITH_POWERPC), -DWITH_POWERPC, )
+POWERPC_LLVM_CONFIG_LIB=$(if $(WITH_POWERPC), powerpc, )
+
+PTX_CXX_FLAGS=$(if $(WITH_NVPTX), -DWITH_NVPTX, )
+PTX_LLVM_CONFIG_LIB=$(if $(WITH_NVPTX), nvptx, )
+PTX_DEVICE_INITIAL_MODULES=$(if $(WITH_NVPTX), libdevice.compute_20.10.bc libdevice.compute_30.10.bc libdevice.compute_35.10.bc, )
+
+AMDGPU_CXX_FLAGS=$(if $(WITH_AMDGPU), -DWITH_AMDGPU, )
+AMDGPU_LLVM_CONFIG_LIB=$(if $(WITH_AMDGPU), amdgpu, )
+# TODO add bitcode files
+
+OPENCL_CXX_FLAGS=$(if $(WITH_OPENCL), -DWITH_OPENCL, )
+OPENCL_LLVM_CONFIG_LIB=$(if $(WITH_OPENCL), , )
+
+METAL_CXX_FLAGS=$(if $(WITH_METAL), -DWITH_METAL, )
+METAL_LLVM_CONFIG_LIB=$(if $(WITH_METAL), , )
+
+OPENGL_CXX_FLAGS=$(if $(WITH_OPENGL), -DWITH_OPENGL, )
+
+D3D12_CXX_FLAGS=$(if $(WITH_D3D12), -DWITH_D3D12, )
+D3D12_LLVM_CONFIG_LIB=$(if $(WITH_D3D12), , )
+
+AARCH64_CXX_FLAGS=$(if $(WITH_AARCH64), -DWITH_AARCH64, )
+AARCH64_LLVM_CONFIG_LIB=$(if $(WITH_AARCH64), aarch64, )
+
+RISCV_CXX_FLAGS=$(if $(WITH_RISCV), -DWITH_RISCV, )
+RISCV_LLVM_CONFIG_LIB=$(if $(WITH_RISCV), riscv, )
+
+INTROSPECTION_CXX_FLAGS=$(if $(WITH_INTROSPECTION), -DWITH_INTROSPECTION, )
+EXCEPTIONS_CXX_FLAGS=$(if $(WITH_EXCEPTIONS), -DHALIDE_WITH_EXCEPTIONS -fexceptions, )
+
+HEXAGON_CXX_FLAGS=$(if $(WITH_HEXAGON), -DWITH_HEXAGON, )
+HEXAGON_LLVM_CONFIG_LIB=$(if $(WITH_HEXAGON), hexagon, )
+
+WEBASSEMBLY_CXX_FLAGS=$(if $(WITH_WEBASSEMBLY), -DWITH_WEBASSEMBLY, )
+WEBASSEMBLY_LLVM_CONFIG_LIB=$(if $(WITH_WEBASSEMBLY), webassembly, )
+
+LLVM_HAS_NO_RTTI = $(findstring -fno-rtti, $(LLVM_CXX_FLAGS))
+WITH_RTTI ?= $(if $(LLVM_HAS_NO_RTTI),, not-empty)
+RTTI_CXX_FLAGS=$(if $(WITH_RTTI), , -fno-rtti )
+
+CXX_VERSION = $(shell $(CXX) --version | head -n1)
+CXX_WARNING_FLAGS = -Wall -Werror -Wno-unused-function -Wcast-qual -Wignored-qualifiers -Wno-comment -Wsign-compare -Wno-unknown-warning-option -Wno-psabi
+ifneq (,$(findstring g++,$(CXX_VERSION)))
+GCC_MAJOR_VERSION := $(shell $(CXX) -dumpfullversion -dumpversion | cut -f1 -d.)
+GCC_MINOR_VERSION := $(shell $(CXX) -dumpfullversion -dumpversion | cut -f2 -d.)
+ifeq (1,$(shell expr $(GCC_MAJOR_VERSION) \> 5 \| $(GCC_MAJOR_VERSION) = 5 \& $(GCC_MINOR_VERSION) \>= 1))
+CXX_WARNING_FLAGS += -Wsuggest-override
+endif
+endif
+
+ifneq (,$(findstring clang,$(CXX_VERSION)))
+LLVM_CXX_FLAGS_LIBCPP := $(findstring -stdlib=libc++, $(LLVM_CXX_FLAGS))
+endif
+
+CXX_FLAGS = $(CXXFLAGS) $(CXX_WARNING_FLAGS) $(RTTI_CXX_FLAGS) -Woverloaded-virtual $(FPIC) $(OPTIMIZE) -fno-omit-frame-pointer -DCOMPILING_HALIDE
+
+CXX_FLAGS += $(LLVM_CXX_FLAGS)
+CXX_FLAGS += $(PTX_CXX_FLAGS)
+CXX_FLAGS += $(ARM_CXX_FLAGS)
+CXX_FLAGS += $(HEXAGON_CXX_FLAGS)
+CXX_FLAGS += $(AARCH64_CXX_FLAGS)
+CXX_FLAGS += $(X86_CXX_FLAGS)
+CXX_FLAGS += $(OPENCL_CXX_FLAGS)
+CXX_FLAGS += $(METAL_CXX_FLAGS)
+CXX_FLAGS += $(OPENGL_CXX_FLAGS)
+CXX_FLAGS += $(D3D12_CXX_FLAGS)
+CXX_FLAGS += $(MIPS_CXX_FLAGS)
+CXX_FLAGS += $(POWERPC_CXX_FLAGS)
+CXX_FLAGS += $(INTROSPECTION_CXX_FLAGS)
+CXX_FLAGS += $(EXCEPTIONS_CXX_FLAGS)
+CXX_FLAGS += $(AMDGPU_CXX_FLAGS)
+CXX_FLAGS += $(RISCV_CXX_FLAGS)
+CXX_FLAGS += $(WEBASSEMBLY_CXX_FLAGS)
+
+# This is required on some hosts like powerpc64le-linux-gnu because we may build
+# everything with -fno-exceptions.  Without -funwind-tables, libHalide.so fails
+# to propagate exceptions and causes a test failure.
+CXX_FLAGS += -funwind-tables
+
+print-%:
+	@echo '$*=$($*)'
+
+LLVM_STATIC_LIBFILES = \
+	bitwriter \
+	bitreader \
+	linker \
+	ipo \
+	passes \
+	mcjit \
+	$(X86_LLVM_CONFIG_LIB) \
+	$(ARM_LLVM_CONFIG_LIB) \
+	$(OPENCL_LLVM_CONFIG_LIB) \
+	$(METAL_LLVM_CONFIG_LIB) \
+	$(PTX_LLVM_CONFIG_LIB) \
+	$(AARCH64_LLVM_CONFIG_LIB) \
+	$(MIPS_LLVM_CONFIG_LIB) \
+	$(POWERPC_LLVM_CONFIG_LIB) \
+	$(HEXAGON_LLVM_CONFIG_LIB) \
+	$(AMDGPU_LLVM_CONFIG_LIB) \
+	$(WEBASSEMBLY_LLVM_CONFIG_LIB) \
+	$(RISCV_LLVM_CONFIG_LIB)
+
+LLVM_STATIC_LIBS = -L $(LLVM_LIBDIR) $(shell $(LLVM_CONFIG) --link-static --libfiles $(LLVM_STATIC_LIBFILES) | sed -e 's/\\/\//g' -e 's/\([a-zA-Z]\):/\/\1/g')
+
+# Add a rpath to the llvm used for linking, in case multiple llvms are
+# installed. Bakes a path on the build system into the .so, so don't
+# use this config for distributions.
+LLVM_SHARED_LIBS = -Wl,-rpath=$(LLVM_LIBDIR) -L $(LLVM_LIBDIR) -lLLVM
+
+LLVM_LIBS_FOR_SHARED_LIBHALIDE=$(if $(WITH_LLVM_INSIDE_SHARED_LIBHALIDE),$(LLVM_STATIC_LIBS),$(LLVM_SHARED_LIBS))
+
+TUTORIAL_CXX_FLAGS ?= -std=c++11 -g -fno-omit-frame-pointer $(RTTI_CXX_FLAGS) -I $(ROOT_DIR)/tools $(SANITIZER_FLAGS) $(LLVM_CXX_FLAGS_LIBCPP)
+# The tutorials contain example code with warnings that we don't want
+# to be flagged as errors, so the test flags are the tutorial flags
+# plus our warning flags.
+# Also allow tests, via conditional compilation, to use the entire
+# capability of the CPU being compiled on via -march=native. This
+# presumes tests are run on the same machine they are compiled on.
+ARCH_FOR_TESTS ?= native
+TEST_CXX_FLAGS ?= $(TUTORIAL_CXX_FLAGS) $(CXX_WARNING_FLAGS) -march=${ARCH_FOR_TESTS}
+TEST_LD_FLAGS = -L$(BIN_DIR) -lHalide $(COMMON_LD_FLAGS)
+
+# In the tests, some of our expectations change depending on the llvm version
+TEST_CXX_FLAGS += -DLLVM_VERSION=$(LLVM_VERSION_TIMES_10)
+
+# gcc 4.8 fires a bogus warning on old versions of png.h
+ifneq (,$(findstring g++,$(CXX_VERSION)))
+ifneq (,$(findstring 4.8,$(CXX_VERSION)))
+TEST_CXX_FLAGS += -Wno-literal-suffix
+endif
+endif
+
+ifeq ($(UNAME), Linux)
+TEST_LD_FLAGS += -rdynamic -Wl,--rpath=$(CURDIR)/$(BIN_DIR)
+endif
+
+ifeq ($(WITH_LLVM_INSIDE_SHARED_LIBHALIDE), )
+TEST_LD_FLAGS += -Wl,--rpath=$(LLVM_LIBDIR)
+endif
+
+ifneq ($(WITH_NVPTX), )
+ifneq (,$(findstring ptx,$(HL_TARGET)))
+TEST_CUDA = 1
+endif
+ifneq (,$(findstring cuda,$(HL_TARGET)))
+TEST_CUDA = 1
+endif
+endif
+
+ifneq ($(WITH_OPENCL), )
+ifneq (,$(findstring opencl,$(HL_TARGET)))
+TEST_OPENCL = 1
+endif
+endif
+
+ifneq ($(WITH_METAL), )
+ifneq (,$(findstring metal,$(HL_TARGET)))
+TEST_METAL = 1
+endif
+endif
+
+ifeq ($(UNAME), Linux)
+ifneq ($(TEST_CUDA), )
+CUDA_LD_FLAGS ?= -L/usr/lib/nvidia-current -lcuda
+endif
+ifneq ($(TEST_OPENCL), )
+OPENCL_LD_FLAGS ?= -lOpenCL
+endif
+OPENGL_LD_FLAGS ?= -lGL
+HOST_OS=linux
+endif
+
+ifeq ($(UNAME), Darwin)
+# Someone with an osx box with cuda installed please fix the line below
+ifneq ($(TEST_CUDA), )
+CUDA_LD_FLAGS ?= -L/usr/local/cuda/lib -lcuda
+endif
+ifneq ($(TEST_OPENCL), )
+OPENCL_LD_FLAGS ?= -framework OpenCL
+endif
+ifneq ($(TEST_METAL), )
+METAL_LD_FLAGS ?= -framework Metal -framework Foundation
+endif
+OPENGL_LD_FLAGS ?= -framework OpenGL
+HOST_OS=os_x
+endif
+
+ifneq ($(TEST_OPENCL), )
+TEST_CXX_FLAGS += -DTEST_OPENCL
+endif
+
+ifneq ($(TEST_METAL), )
+TEST_CXX_FLAGS += -DTEST_METAL
+endif
+
+ifneq ($(TEST_CUDA), )
+TEST_CXX_FLAGS += -DTEST_CUDA
+TEST_CXX_FLAGS += -I/usr/local/cuda/include
+endif
+
+# Compiling the tutorials requires libpng
+LIBPNG_LIBS_DEFAULT = $(shell libpng-config --ldflags)
+LIBPNG_CXX_FLAGS ?= $(shell libpng-config --cflags)
+# Workaround for libpng-config pointing to 64-bit versions on linux even when we're building for 32-bit
+ifneq (,$(findstring -m32,$(CXX)))
+ifneq (,$(findstring x86_64,$(LIBPNG_LIBS_DEFAULT)))
+LIBPNG_LIBS ?= -lpng
+endif
+endif
+LIBPNG_LIBS ?= $(LIBPNG_LIBS_DEFAULT)
+
+# Workaround brew Cellar path for libpng-config output.
+LIBJPEG_LINKER_PATH ?= $(shell echo $(LIBPNG_LIBS_DEFAULT) | sed -e'/-L.*[/][Cc]ellar[/]libpng/!d;s=\(.*\)/[Cc]ellar/libpng/.*=\1/lib=')
+LIBJPEG_LIBS ?= $(LIBJPEG_LINKER_PATH) -ljpeg
+
+# There's no libjpeg-config, unfortunately. We should look for
+# jpeglib.h one directory level up from png.h . Also handle
+# Mac OS brew installs where libpng-config returns paths
+# into the PNG cellar.
+LIBPNG_INCLUDE_DIRS = $(filter -I%,$(LIBPNG_CXX_FLAGS))
+LIBJPEG_CXX_FLAGS ?= $(shell echo $(LIBPNG_INCLUDE_DIRS) | sed -e'/[Cc]ellar[/]libpng/!s=\(.*\)=\1/..=;s=\(.*\)/[Cc]ellar/libpng/.*=\1/include=')
+
+IMAGE_IO_LIBS = $(LIBPNG_LIBS) $(LIBJPEG_LIBS)
+IMAGE_IO_CXX_FLAGS = $(LIBPNG_CXX_FLAGS) $(LIBJPEG_CXX_FLAGS)
+
+# We're building into the current directory $(CURDIR). Find the Halide
+# repo root directory (the location of the makefile)
+THIS_MAKEFILE = $(realpath $(filter %Makefile, $(MAKEFILE_LIST)))
+ROOT_DIR = $(strip $(shell dirname $(THIS_MAKEFILE)))
+SRC_DIR  = $(ROOT_DIR)/src
+
+TARGET=$(if $(HL_TARGET),$(HL_TARGET),host)
+
+# The following directories are all relative to the output directory (i.e. $(CURDIR), not $(SRC_DIR))
+LIB_DIR     = lib
+BIN_DIR     = bin
+DISTRIB_DIR = distrib
+INCLUDE_DIR = include
+SHARE_DIR   = share
+DOC_DIR     = $(SHARE_DIR)/doc/Halide
+BUILD_DIR   = $(BIN_DIR)/build
+FILTERS_DIR = $(BIN_DIR)/$(TARGET)/build
+TMP_DIR     = $(BUILD_DIR)/tmp
+HEXAGON_RUNTIME_LIBS_DIR = src/runtime/hexagon_remote/bin
+HEXAGON_RUNTIME_LIBS = \
+  $(HEXAGON_RUNTIME_LIBS_DIR)/arm-32-android/libhalide_hexagon_host.so \
+  $(HEXAGON_RUNTIME_LIBS_DIR)/arm-64-android/libhalide_hexagon_host.so \
+  $(HEXAGON_RUNTIME_LIBS_DIR)/host/libhalide_hexagon_host.so \
+  $(HEXAGON_RUNTIME_LIBS_DIR)/v62/hexagon_sim_remote \
+  $(HEXAGON_RUNTIME_LIBS_DIR)/v62/libhalide_hexagon_remote_skel.so \
+  $(HEXAGON_RUNTIME_LIBS_DIR)/v62/signed_by_debug/libhalide_hexagon_remote_skel.so
+
+# Keep this list sorted in alphabetical order.
+SOURCE_FILES = \
+  AddAtomicMutex.cpp \
+  AddImageChecks.cpp \
+  AddParameterChecks.cpp \
+  AlignLoads.cpp \
+  AllocationBoundsInference.cpp \
+  ApplySplit.cpp \
+  Argument.cpp \
+  AssociativeOpsTable.cpp \
+  Associativity.cpp \
+  AsyncProducers.cpp \
+  AutoScheduleUtils.cpp \
+  BoundaryConditions.cpp \
+  Bounds.cpp \
+  BoundsInference.cpp \
+  BoundSmallAllocations.cpp \
+  Buffer.cpp \
+  CanonicalizeGPUVars.cpp \
+  Closure.cpp \
+  CodeGen_ARM.cpp \
+  CodeGen_C.cpp \
+  CodeGen_D3D12Compute_Dev.cpp \
+  CodeGen_GPU_Dev.cpp \
+  CodeGen_GPU_Host.cpp \
+  CodeGen_Hexagon.cpp \
+  CodeGen_Internal.cpp \
+  CodeGen_LLVM.cpp \
+  CodeGen_Metal_Dev.cpp \
+  CodeGen_MIPS.cpp \
+  CodeGen_OpenCL_Dev.cpp \
+  CodeGen_OpenGL_Dev.cpp \
+  CodeGen_OpenGLCompute_Dev.cpp \
+  CodeGen_Posix.cpp \
+  CodeGen_PowerPC.cpp \
+  CodeGen_PTX_Dev.cpp \
+  CodeGen_PyTorch.cpp \
+  CodeGen_RISCV.cpp \
+  CodeGen_WebAssembly.cpp \
+  CodeGen_X86.cpp \
+  CompilerLogger.cpp \
+  CPlusPlusMangle.cpp \
+  CSE.cpp \
+  Debug.cpp \
+  DebugArguments.cpp \
+  DebugToFile.cpp \
+  Definition.cpp \
+  Deinterleave.cpp \
+  Derivative.cpp \
+  DerivativeUtils.cpp \
+  DeviceArgument.cpp \
+  DeviceInterface.cpp \
+  Dimension.cpp \
+  EarlyFree.cpp \
+  Elf.cpp \
+  EliminateBoolVectors.cpp \
+  EmulateFloat16Math.cpp \
+  Error.cpp \
+  Expr.cpp \
+  FastIntegerDivide.cpp \
+  FindCalls.cpp \
+  FlattenNestedRamps.cpp \
+  Float16.cpp \
+  Func.cpp \
+  Function.cpp \
+  FuseGPUThreadLoops.cpp \
+  FuzzFloatStores.cpp \
+  Generator.cpp \
+  HexagonOffload.cpp \
+  HexagonOptimize.cpp \
+  ImageParam.cpp \
+  InferArguments.cpp \
+  InjectHostDevBufferCopies.cpp \
+  InjectOpenGLIntrinsics.cpp \
+  Inline.cpp \
+  InlineReductions.cpp \
+  IntegerDivisionTable.cpp \
+  Interval.cpp \
+  Introspection.cpp \
+  IR.cpp \
+  IREquality.cpp \
+  IRMatch.cpp \
+  IRMutator.cpp \
+  IROperator.cpp \
+  IRPrinter.cpp \
+  IRVisitor.cpp \
+  JITModule.cpp \
+  Lerp.cpp \
+  LICM.cpp \
+  LLVM_Output.cpp \
+  LLVM_Runtime_Linker.cpp \
+  LoopCarry.cpp \
+  Lower.cpp \
+  LowerWarpShuffles.cpp \
+  MatlabWrapper.cpp \
+  Memoization.cpp \
+  Module.cpp \
+  ModulusRemainder.cpp \
+  Monotonic.cpp \
+  ObjectInstanceRegistry.cpp \
+  OutputImageParam.cpp \
+  ParallelRVar.cpp \
+  Parameter.cpp \
+  ParamMap.cpp \
+  PartitionLoops.cpp \
+  Pipeline.cpp \
+  Prefetch.cpp \
+  PrintLoopNest.cpp \
+  Profiling.cpp \
+  PurifyIndexMath.cpp \
+  PythonExtensionGen.cpp \
+  Qualify.cpp \
+  Random.cpp \
+  RDom.cpp \
+  Realization.cpp \
+  RealizationOrder.cpp \
+  Reduction.cpp \
+  RegionCosts.cpp \
+  RemoveDeadAllocations.cpp \
+  RemoveExternLoops.cpp \
+  RemoveUndef.cpp \
+  Schedule.cpp \
+  ScheduleFunctions.cpp \
+  SelectGPUAPI.cpp \
+  Simplify.cpp \
+  Simplify_Add.cpp \
+  Simplify_And.cpp \
+  Simplify_Call.cpp \
+  Simplify_Cast.cpp \
+  Simplify_Div.cpp \
+  Simplify_EQ.cpp \
+  Simplify_Exprs.cpp \
+  Simplify_Let.cpp \
+  Simplify_LT.cpp \
+  Simplify_Max.cpp \
+  Simplify_Min.cpp \
+  Simplify_Mod.cpp \
+  Simplify_Mul.cpp \
+  Simplify_Not.cpp \
+  Simplify_Or.cpp \
+  Simplify_Select.cpp \
+  Simplify_Shuffle.cpp \
+  Simplify_Stmts.cpp \
+  Simplify_Sub.cpp \
+  SimplifyCorrelatedDifferences.cpp \
+  SimplifySpecializations.cpp \
+  SkipStages.cpp \
+  SlidingWindow.cpp \
+  Solve.cpp \
+  SplitTuples.cpp \
+  StmtToHtml.cpp \
+  StorageFlattening.cpp \
+  StorageFolding.cpp \
+  StrictifyFloat.cpp \
+  Substitute.cpp \
+  Target.cpp \
+  Tracing.cpp \
+  TrimNoOps.cpp \
+  Tuple.cpp \
+  Type.cpp \
+  UnifyDuplicateLets.cpp \
+  UniquifyVariableNames.cpp \
+  UnpackBuffers.cpp \
+  UnrollLoops.cpp \
+  UnsafePromises.cpp \
+  Util.cpp \
+  Var.cpp \
+  VaryingAttributes.cpp \
+  VectorizeLoops.cpp \
+  WasmExecutor.cpp \
+  WrapCalls.cpp
+
+# The externally-visible header files that go into making Halide.h.
+# Don't include anything here that includes llvm headers.
+# Keep this list sorted in alphabetical order.
+HEADER_FILES = \
+  AddAtomicMutex.h \
+  AddImageChecks.h \
+  AddParameterChecks.h \
+  AlignLoads.h \
+  AllocationBoundsInference.h \
+  ApplySplit.h \
+  Argument.h \
+  AssociativeOpsTable.h \
+  Associativity.h \
+  AsyncProducers.h \
+  AutoScheduleUtils.h \
+  BoundaryConditions.h \
+  Bounds.h \
+  BoundsInference.h \
+  BoundSmallAllocations.h \
+  Buffer.h \
+  CanonicalizeGPUVars.h \
+  Closure.h \
+  CodeGen_ARM.h \
+  CodeGen_C.h \
+  CodeGen_D3D12Compute_Dev.h \
+  CodeGen_GPU_Dev.h \
+  CodeGen_GPU_Host.h \
+  CodeGen_Internal.h \
+  CodeGen_LLVM.h \
+  CodeGen_Metal_Dev.h \
+  CodeGen_MIPS.h \
+  CodeGen_OpenCL_Dev.h \
+  CodeGen_OpenGL_Dev.h \
+  CodeGen_OpenGLCompute_Dev.h \
+  CodeGen_Posix.h \
+  CodeGen_PowerPC.h \
+  CodeGen_PTX_Dev.h \
+  CodeGen_PyTorch.h \
+  CodeGen_RISCV.h \
+  CodeGen_WebAssembly.h \
+  CodeGen_X86.h \
+  CompilerLogger.h \
+  ConciseCasts.h \
+  CPlusPlusMangle.h \
+  CSE.h \
+  Debug.h \
+  DebugArguments.h \
+  DebugToFile.h \
+  Definition.h \
+  Deinterleave.h \
+  Derivative.h \
+  DerivativeUtils.h \
+  DeviceAPI.h \
+  DeviceArgument.h \
+  DeviceInterface.h \
+  Dimension.h \
+  EarlyFree.h \
+  Elf.h \
+  EliminateBoolVectors.h \
+  EmulateFloat16Math.h \
+  Error.h \
+  Expr.h \
+  ExprUsesVar.h \
+  Extern.h \
+  ExternFuncArgument.h \
+  FastIntegerDivide.h \
+  FindCalls.h \
+  FlattenNestedRamps.h \
+  Float16.h \
+  Func.h \
+  Function.h \
+  FunctionPtr.h \
+  FuseGPUThreadLoops.h \
+  FuzzFloatStores.h \
+  Generator.h \
+  HexagonOffload.h \
+  HexagonOptimize.h \
+  ImageParam.h \
+  InferArguments.h \
+  InjectHostDevBufferCopies.h \
+  InjectOpenGLIntrinsics.h \
+  Inline.h \
+  InlineReductions.h \
+  IntegerDivisionTable.h \
+  Interval.h \
+  Introspection.h \
+  IntrusivePtr.h \
+  IR.h \
+  IREquality.h \
+  IRMatch.h \
+  IRMutator.h \
+  IROperator.h \
+  IRPrinter.h \
+  IRVisitor.h \
+  WasmExecutor.h \
+  JITModule.h \
+  Lambda.h \
+  Lerp.h \
+  LICM.h \
+  LLVM_Output.h \
+  LLVM_Runtime_Linker.h \
+  LoopCarry.h \
+  Lower.h \
+  LowerWarpShuffles.h \
+  MainPage.h \
+  MatlabWrapper.h \
+  Memoization.h \
+  Module.h \
+  ModulusRemainder.h \
+  Monotonic.h \
+  ObjectInstanceRegistry.h \
+  OutputImageParam.h \
+  ParallelRVar.h \
+  Param.h \
+  Parameter.h \
+  ParamMap.h \
+  PartitionLoops.h \
+  Pipeline.h \
+  Prefetch.h \
+  Profiling.h \
+  PurifyIndexMath.h \
+  PythonExtensionGen.h \
+  Qualify.h \
+  Random.h \
+  Realization.h \
+  RDom.h \
+  RealizationOrder.h \
+  Reduction.h \
+  RegionCosts.h \
+  RemoveDeadAllocations.h \
+  RemoveExternLoops.h \
+  RemoveUndef.h \
+  runtime/HalideBuffer.h \
+  runtime/HalideRuntime.h \
+  Schedule.h \
+  ScheduleFunctions.h \
+  Scope.h \
+  SelectGPUAPI.h \
+  Simplify.h \
+  SimplifyCorrelatedDifferences.h \
+  SimplifySpecializations.h \
+  SkipStages.h \
+  SlidingWindow.h \
+  Solve.h \
+  SplitTuples.h \
+  StmtToHtml.h \
+  StorageFlattening.h \
+  StorageFolding.h \
+  StrictifyFloat.h \
+  Substitute.h \
+  Target.h \
+  ThreadPool.h \
+  Tracing.h \
+  TrimNoOps.h \
+  Tuple.h \
+  Type.h \
+  UnifyDuplicateLets.h \
+  UniquifyVariableNames.h \
+  UnpackBuffers.h \
+  UnrollLoops.h \
+  UnsafePromises.h \
+  Util.h \
+  Var.h \
+  VaryingAttributes.h \
+  VectorizeLoops.h \
+  WrapCalls.h
+
+OBJECTS = $(SOURCE_FILES:%.cpp=$(BUILD_DIR)/%.o)
+HEADERS = $(HEADER_FILES:%.h=$(SRC_DIR)/%.h)
+
+RUNTIME_CPP_COMPONENTS = \
+  aarch64_cpu_features \
+  alignment_128 \
+  alignment_32 \
+  allocation_cache \
+  alignment_64 \
+  android_clock \
+  android_host_cpu_count \
+  android_io \
+  arm_cpu_features \
+  cache \
+  can_use_target \
+  cuda \
+  destructors \
+  device_interface \
+  errors \
+  fake_get_symbol \
+  fake_thread_pool \
+  float16_t \
+  fuchsia_clock \
+  fuchsia_host_cpu_count \
+  fuchsia_yield \
+  gpu_device_selection \
+  halide_buffer_t \
+  hexagon_cache_allocator \
+  hexagon_cpu_features \
+  hexagon_dma_pool \
+  hexagon_dma \
+  hexagon_host \
+  ios_io \
+  linux_clock \
+  linux_host_cpu_count \
+  linux_yield \
+  matlab \
+  metadata \
+  metal \
+  metal_objc_arm \
+  metal_objc_x86 \
+  mips_cpu_features \
+  module_aot_ref_count \
+  module_jit_ref_count \
+  msan \
+  msan_stubs \
+  opencl \
+  opengl \
+  openglcompute \
+  opengl_egl_context \
+  opengl_glx_context \
+  osx_clock \
+  osx_get_symbol \
+  osx_host_cpu_count \
+  osx_opengl_context \
+  osx_yield \
+  posix_allocator \
+  posix_clock \
+  posix_error_handler \
+  posix_get_symbol \
+  posix_io \
+  posix_print \
+  posix_threads \
+  posix_threads_tsan \
+  powerpc_cpu_features \
+  prefetch \
+  profiler \
+  profiler_inlined \
+  pseudostack \
+  qurt_allocator \
+  qurt_hvx \
+  qurt_hvx_vtcm \
+  qurt_init_fini \
+  qurt_threads \
+  qurt_threads_tsan \
+  qurt_yield \
+  riscv_cpu_features \
+  runtime_api \
+  ssp \
+  to_string \
+  trace_helper \
+  tracing \
+  wasm_cpu_features \
+  windows_clock \
+  windows_cuda \
+  windows_d3d12compute_arm \
+  windows_d3d12compute_x86 \
+  windows_get_symbol \
+  windows_io \
+  windows_opencl \
+  windows_profiler \
+  windows_threads \
+  windows_threads_tsan \
+  windows_yield \
+  write_debug_image \
+  x86_cpu_features \
+
+RUNTIME_LL_COMPONENTS = \
+  aarch64 \
+  arm \
+  arm_no_neon \
+  hvx_128 \
+  mips \
+  posix_math \
+  powerpc \
+  ptx_dev \
+  wasm_math \
+  win32_math \
+  x86 \
+  x86_avx \
+  x86_avx2 \
+  x86_sse41
+
+RUNTIME_EXPORTED_INCLUDES = $(INCLUDE_DIR)/HalideRuntime.h \
+                            $(INCLUDE_DIR)/HalideRuntimeD3D12Compute.h \
+                            $(INCLUDE_DIR)/HalideRuntimeCuda.h \
+                            $(INCLUDE_DIR)/HalideRuntimeHexagonDma.h \
+                            $(INCLUDE_DIR)/HalideRuntimeHexagonHost.h \
+                            $(INCLUDE_DIR)/HalideRuntimeOpenCL.h \
+                            $(INCLUDE_DIR)/HalideRuntimeOpenGL.h \
+                            $(INCLUDE_DIR)/HalideRuntimeOpenGLCompute.h \
+                            $(INCLUDE_DIR)/HalideRuntimeMetal.h	\
+                            $(INCLUDE_DIR)/HalideRuntimeQurt.h \
+                            $(INCLUDE_DIR)/HalideBuffer.h \
+                            $(INCLUDE_DIR)/HalidePyTorchHelpers.h \
+                            $(INCLUDE_DIR)/HalidePyTorchCudaHelpers.h
+
+INITIAL_MODULES = $(RUNTIME_CPP_COMPONENTS:%=$(BUILD_DIR)/initmod.%_32.o) \
+                  $(RUNTIME_CPP_COMPONENTS:%=$(BUILD_DIR)/initmod.%_64.o) \
+                  $(RUNTIME_CPP_COMPONENTS:%=$(BUILD_DIR)/initmod.%_32_debug.o) \
+                  $(RUNTIME_CPP_COMPONENTS:%=$(BUILD_DIR)/initmod.%_64_debug.o) \
+                  $(RUNTIME_EXPORTED_INCLUDES:$(INCLUDE_DIR)/%.h=$(BUILD_DIR)/initmod.%_h.o) \
+                  $(BUILD_DIR)/initmod.inlined_c.o \
+                  $(RUNTIME_LL_COMPONENTS:%=$(BUILD_DIR)/initmod.%_ll.o) \
+                  $(PTX_DEVICE_INITIAL_MODULES:libdevice.%.bc=$(BUILD_DIR)/initmod_ptx.%_ll.o)
+
+# Add the Hexagon simulator to the rpath on Linux. (Not supported elsewhere, so no else cases.)
+ifeq ($(UNAME), Linux)
+ifneq (,$(WITH_HEXAGON))
+ifneq (,$(HL_HEXAGON_TOOLS))
+TEST_LD_FLAGS += -Wl,--rpath=$(ROOT_DIR)/src/runtime/hexagon_remote/bin/host
+TEST_LD_FLAGS += -Wl,--rpath=$(HL_HEXAGON_TOOLS)/lib/iss
+endif
+endif
+endif
+
+.PHONY: all
+all: distrib test_internal
+
+# Depending on which linker we're using,
+# we need a different invocation to get the
+# linker map file.
+ifeq ($(UNAME), Darwin)
+    MAP_FLAGS= -Wl,-map -Wl,$(BUILD_DIR)/llvm_objects/list.all
+else
+    MAP_FLAGS= -Wl,-Map=$(BUILD_DIR)/llvm_objects/list.all
+endif
+
+$(BUILD_DIR)/llvm_objects/list: $(OBJECTS) $(INITIAL_MODULES)
+	# Determine the relevant object files from llvm with a dummy
+	# compilation. Passing -map to the linker gets it to list, as
+	# part of the linker map file, the object files in which archives it uses to
+	# resolve symbols. We only care about the libLLVM ones, which we will filter below.
+	@mkdir -p $(@D)
+	$(CXX) -o /dev/null -shared $(MAP_FLAGS) $(OBJECTS) $(INITIAL_MODULES) $(LLVM_STATIC_LIBS) $(LLVM_SYSTEM_LIBS) $(COMMON_LD_FLAGS) > /dev/null
+	# if the list has changed since the previous build, or there
+	# is no list from a previous build, then delete any old object
+	# files and re-extract the required object files
+	cd $(BUILD_DIR)/llvm_objects; \
+	cat list.all | LANG=C sed -n 's/^[^\/]*\(\/[^ ()]*libLLVM.*[.]a\)[^a-zA-Z]*\([^ ()]*[.]o\).*$$/\1 \2/p' | sort | uniq > list.new; \
+	rm list.all; \
+	if cmp -s list.new list; \
+	then \
+	echo "No changes in LLVM deps"; \
+	touch list; \
+	else \
+	rm -f llvm_*.o*; \
+	cat list.new | sed = | sed "N;s/\n /\n/;s/\([0-9]*\)\n\([^ ]*\) \([^ ]*\)/ar x \2 \3; mv \3 llvm_\1_\3/" | bash - ; \
+	mv list.new list; \
+	fi
+
+$(LIB_DIR)/libHalide.a: $(OBJECTS) $(INITIAL_MODULES) $(BUILD_DIR)/llvm_objects/list
+	# Archive together all the halide and llvm object files
+	@mkdir -p $(@D)
+	@rm -f $(LIB_DIR)/libHalide.a
+	ar q $(LIB_DIR)/libHalide.a $(OBJECTS) $(INITIAL_MODULES) $(BUILD_DIR)/llvm_objects/llvm_*.o*
+	ranlib $(LIB_DIR)/libHalide.a
+
+ifeq ($(UNAME), Linux)
+LIBHALIDE_SONAME_FLAGS=-Wl,-soname,libHalide.so
+else
+LIBHALIDE_SONAME_FLAGS=
+endif
+
+$(BIN_DIR)/libHalide.$(SHARED_EXT): $(OBJECTS) $(INITIAL_MODULES)
+	@mkdir -p $(@D)
+	$(CXX) -shared $(OBJECTS) $(INITIAL_MODULES) $(LLVM_LIBS_FOR_SHARED_LIBHALIDE) $(LLVM_SYSTEM_LIBS) $(COMMON_LD_FLAGS) $(INSTALL_NAME_TOOL_LD_FLAGS) $(LIBHALIDE_SONAME_FLAGS) -o $(BIN_DIR)/libHalide.$(SHARED_EXT)
+ifeq ($(UNAME), Darwin)
+	install_name_tool -id $(CURDIR)/$(BIN_DIR)/libHalide.$(SHARED_EXT) $(BIN_DIR)/libHalide.$(SHARED_EXT)
+endif
+
+$(INCLUDE_DIR)/Halide.h: $(SRC_DIR)/../LICENSE.txt $(HEADERS) $(BIN_DIR)/build_halide_h
+	@mkdir -p $(@D)
+	$(BIN_DIR)/build_halide_h $(SRC_DIR)/../LICENSE.txt $(HEADERS) > $(INCLUDE_DIR)/Halide.h
+	# Also generate a precompiled version in the same folder so that anything compiled with a compatible set of flags can use it
+	@mkdir -p $(INCLUDE_DIR)/Halide.h.gch
+	$(CXX) -std=c++11 $(TEST_CXX_FLAGS) -I$(ROOT_DIR) $(OPTIMIZE) -x c++-header $(INCLUDE_DIR)/Halide.h -o $(INCLUDE_DIR)/Halide.h.gch/Halide.default.gch
+	$(CXX) -std=c++11 $(TEST_CXX_FLAGS) -I$(ROOT_DIR) $(OPTIMIZE_FOR_BUILD_TIME) -x c++-header $(INCLUDE_DIR)/Halide.h -o $(INCLUDE_DIR)/Halide.h.gch/Halide.test.gch
+
+$(INCLUDE_DIR)/HalideRuntime%: $(SRC_DIR)/runtime/HalideRuntime%
+	echo Copying $<
+	@mkdir -p $(@D)
+	cp $< $(INCLUDE_DIR)/
+
+$(INCLUDE_DIR)/HalideBuffer.h: $(SRC_DIR)/runtime/HalideBuffer.h
+	echo Copying $<
+	@mkdir -p $(@D)
+	cp $< $(INCLUDE_DIR)/
+
+$(INCLUDE_DIR)/HalidePyTorchHelpers.h: $(SRC_DIR)/runtime/HalidePyTorchHelpers.h
+	echo Copying $<
+	@mkdir -p $(@D)
+	cp $< $(INCLUDE_DIR)/
+
+$(INCLUDE_DIR)/HalidePyTorchCudaHelpers.h: $(SRC_DIR)/runtime/HalidePyTorchCudaHelpers.h
+	echo Copying $<
+	@mkdir -p $(@D)
+	cp $< $(INCLUDE_DIR)/
+
+$(BIN_DIR)/build_halide_h: $(ROOT_DIR)/tools/build_halide_h.cpp
+	@-mkdir -p $(@D)
+	$(CXX) -std=c++11 $< -o $@
+
+-include $(OBJECTS:.o=.d)
+-include $(INITIAL_MODULES:.o=.d)
+
+# Compile generic 32- or 64-bit code
+# (The 'nacl' is a red herring. This is just a generic 32-bit little-endian target.)
+RUNTIME_TRIPLE_32 = "le32-unknown-nacl-unknown"
+RUNTIME_TRIPLE_64 = "le64-unknown-unknown-unknown"
+
+# Windows requires special handling.  The generic windows_* modules must have -fpic elided
+# and (for 64 bit) must set wchar to be 2 bytes.  The windows_*_x86 and windows_*_arm
+# modules need to interact with specific calling conventions related to D3D12.
+#
+# TODO(marcos): generic code won't hold for ARM32... If ARM32 support becomes necessary,
+# all windows-related runtime modules will have to be wrapped in windows_*_arm.cpp files
+# for now, generic Windows 32bit code just assumes x86 (i386)
+RUNTIME_TRIPLE_WIN_X86_32 = "i386-unknown-windows-unknown"
+RUNTIME_TRIPLE_WIN_X86_64 = "x86_64-unknown-windows-unknown"
+RUNTIME_TRIPLE_WIN_ARM_32 = "arm-unknown-windows-unknown"
+RUNTIME_TRIPLE_WIN_ARM_64 = "aarch64-unknown-windows-unknown"
+RUNTIME_TRIPLE_WIN_GENERIC_64 = "le64-unknown-windows-unknown"
+
+# `-fno-threadsafe-statics` is very important here (note that it allows us to use a 'modern' C++
+# standard but still skip threadsafe guards for static initialization in our runtime code)
+RUNTIME_CXX_FLAGS = -std=c++11 -O3 -fno-vectorize -ffreestanding -fno-blocks -fno-exceptions -fno-unwind-tables -fno-threadsafe-statics
+
+$(BUILD_DIR)/initmod.windows_%_x86_32.ll: $(SRC_DIR)/runtime/windows_%_x86.cpp $(BUILD_DIR)/clang_ok
+	@mkdir -p $(@D)
+	$(CLANG) $(CXX_WARNING_FLAGS) $(RUNTIME_CXX_FLAGS) -m32 -target $(RUNTIME_TRIPLE_WIN_X86_32) -DCOMPILING_HALIDE_RUNTIME -DBITS_32 -emit-llvm -S $(SRC_DIR)/runtime/windows_$*_x86.cpp -o $@ -MMD -MP -MF $(BUILD_DIR)/initmod.windows_$*_x86_32.d
+
+$(BUILD_DIR)/initmod.windows_%_x86_64.ll: $(SRC_DIR)/runtime/windows_%_x86.cpp $(BUILD_DIR)/clang_ok
+	@mkdir -p $(@D)
+	$(CLANG) $(CXX_WARNING_FLAGS) $(RUNTIME_CXX_FLAGS) -m64 -target $(RUNTIME_TRIPLE_WIN_X86_64) -DCOMPILING_HALIDE_RUNTIME -DBITS_64 -emit-llvm -S $(SRC_DIR)/runtime/windows_$*_x86.cpp -o $@ -MMD -MP -MF $(BUILD_DIR)/initmod.windows_$*_x86_64.d
+
+$(BUILD_DIR)/initmod.windows_%_arm_32.ll: $(SRC_DIR)/runtime/windows_%_arm.cpp $(BUILD_DIR)/clang_ok
+	@mkdir -p $(@D)
+	$(CLANG) $(CXX_WARNING_FLAGS) $(RUNTIME_CXX_FLAGS) -m32 -target $(RUNTIME_TRIPLE_WIN_ARM_32) -DCOMPILING_HALIDE_RUNTIME -DBITS_32 -emit-llvm -S $(SRC_DIR)/runtime/windows_$*_arm.cpp -o $@ -MMD -MP -MF $(BUILD_DIR)/initmod.windows_$*_arm_32.d
+
+$(BUILD_DIR)/initmod.windows_%_arm_64.ll: $(SRC_DIR)/runtime/windows_%_arm.cpp $(BUILD_DIR)/clang_ok
+	@mkdir -p $(@D)
+	$(CLANG) $(CXX_WARNING_FLAGS) $(RUNTIME_CXX_FLAGS) -m64 -target $(RUNTIME_TRIPLE_WIN_ARM_64) -DCOMPILING_HALIDE_RUNTIME -DBITS_64 -emit-llvm -S $(SRC_DIR)/runtime/windows_$*_arm.cpp -o $@ -MMD -MP -MF $(BUILD_DIR)/initmod.windows_$*_arm_64.d
+
+$(BUILD_DIR)/initmod.windows_%_32.ll: $(SRC_DIR)/runtime/windows_%.cpp $(BUILD_DIR)/clang_ok
+	@mkdir -p $(@D)
+	$(CLANG) $(CXX_WARNING_FLAGS) $(RUNTIME_CXX_FLAGS) -m32 -target $(RUNTIME_TRIPLE_WIN_X86_32) -DCOMPILING_HALIDE_RUNTIME -DBITS_32 -emit-llvm -S $(SRC_DIR)/runtime/windows_$*.cpp -o $@ -MMD -MP -MF $(BUILD_DIR)/initmod.windows_$*_32.d
+
+$(BUILD_DIR)/initmod.windows_%_64.ll: $(SRC_DIR)/runtime/windows_%.cpp $(BUILD_DIR)/clang_ok
+	@mkdir -p $(@D)
+	$(CLANG) $(CXX_WARNING_FLAGS) $(RUNTIME_CXX_FLAGS) -m64 -target $(RUNTIME_TRIPLE_WIN_GENERIC_64) -fshort-wchar -DCOMPILING_HALIDE_RUNTIME -DBITS_64 -emit-llvm -S $(SRC_DIR)/runtime/windows_$*.cpp -o $@ -MMD -MP -MF $(BUILD_DIR)/initmod.windows_$*_64.d
+
+$(BUILD_DIR)/initmod.%_64.ll: $(SRC_DIR)/runtime/%.cpp $(BUILD_DIR)/clang_ok
+	@mkdir -p $(@D)
+	$(CLANG) $(CXX_WARNING_FLAGS) $(RUNTIME_CXX_FLAGS) -fpic -m64 -target $(RUNTIME_TRIPLE_64) -DCOMPILING_HALIDE_RUNTIME -DBITS_64 -emit-llvm -S $(SRC_DIR)/runtime/$*.cpp -o $@ -MMD -MP -MF $(BUILD_DIR)/initmod.$*_64.d
+
+$(BUILD_DIR)/initmod.%_32.ll: $(SRC_DIR)/runtime/%.cpp $(BUILD_DIR)/clang_ok
+	@mkdir -p $(@D)
+	$(CLANG) $(CXX_WARNING_FLAGS) $(RUNTIME_CXX_FLAGS) -fpic -m32 -target $(RUNTIME_TRIPLE_32) -DCOMPILING_HALIDE_RUNTIME -DBITS_32 -emit-llvm -S $(SRC_DIR)/runtime/$*.cpp -o $@ -MMD -MP -MF $(BUILD_DIR)/initmod.$*_32.d
+
+$(BUILD_DIR)/initmod.windows_%_x86_32_debug.ll: $(SRC_DIR)/runtime/windows_%_x86.cpp $(BUILD_DIR)/clang_ok
+	@mkdir -p $(@D)
+	$(CLANG) $(CXX_WARNING_FLAGS) -g -DDEBUG_RUNTIME $(RUNTIME_CXX_FLAGS) -m32 -target $(RUNTIME_TRIPLE_WIN_X86_32) -DCOMPILING_HALIDE_RUNTIME -DBITS_32 -emit-llvm -S $(SRC_DIR)/runtime/windows_$*_x86.cpp -o $@ -MMD -MP -MF $(BUILD_DIR)/initmod.windows_$*_x86_32_debug.d
+
+$(BUILD_DIR)/initmod.windows_%_x86_64_debug.ll: $(SRC_DIR)/runtime/windows_%_x86.cpp $(BUILD_DIR)/clang_ok
+	@mkdir -p $(@D)
+	$(CLANG) $(CXX_WARNING_FLAGS) -g -DDEBUG_RUNTIME $(RUNTIME_CXX_FLAGS) -m64 -target $(RUNTIME_TRIPLE_WIN_X86_64) -DCOMPILING_HALIDE_RUNTIME -DBITS_64 -emit-llvm -S $(SRC_DIR)/runtime/windows_$*_x86.cpp -o $@ -MMD -MP -MF $(BUILD_DIR)/initmod.windows_$*_x86_64_debug.d
+
+$(BUILD_DIR)/initmod.windows_%_arm_32_debug.ll: $(SRC_DIR)/runtime/windows_%_arm.cpp $(BUILD_DIR)/clang_ok
+	@mkdir -p $(@D)
+	$(CLANG) $(CXX_WARNING_FLAGS) -g -DDEBUG_RUNTIME $(RUNTIME_CXX_FLAGS) -m32 -target $(RUNTIME_TRIPLE_WIN_ARM_32) -DCOMPILING_HALIDE_RUNTIME -DBITS_32 -emit-llvm -S $(SRC_DIR)/runtime/windows_$*_arm.cpp -o $@ -MMD -MP -MF $(BUILD_DIR)/initmod.windows_$*_arm_32_debug.d
+
+$(BUILD_DIR)/initmod.windows_%_arm_64_debug.ll: $(SRC_DIR)/runtime/windows_%_arm.cpp $(BUILD_DIR)/clang_ok
+	@mkdir -p $(@D)
+	$(CLANG) $(CXX_WARNING_FLAGS) -g -DDEBUG_RUNTIME $(RUNTIME_CXX_FLAGS) -m64 -target $(RUNTIME_TRIPLE_WIN_ARM_64) -DCOMPILING_HALIDE_RUNTIME -DBITS_64 -emit-llvm -S $(SRC_DIR)/runtime/windows_$*_arm.cpp -o $@ -MMD -MP -MF $(BUILD_DIR)/initmod.windows_$*_arm_64_debug.d
+
+$(BUILD_DIR)/initmod.windows_%_64_debug.ll: $(SRC_DIR)/runtime/windows_%.cpp $(BUILD_DIR)/clang_ok
+	@mkdir -p $(@D)
+	$(CLANG) $(CXX_WARNING_FLAGS) -g -DDEBUG_RUNTIME $(RUNTIME_CXX_FLAGS) -m64 -target $(RUNTIME_TRIPLE_WIN_GENERIC_64) -DCOMPILING_HALIDE_RUNTIME -DBITS_64 -emit-llvm -S $(SRC_DIR)/runtime/windows_$*.cpp -o $@ -MMD -MP -MF $(BUILD_DIR)/initmod.windows_$*_64_debug.d
+
+$(BUILD_DIR)/initmod.%_64_debug.ll: $(SRC_DIR)/runtime/%.cpp $(BUILD_DIR)/clang_ok
+	@mkdir -p $(@D)
+	$(CLANG) $(CXX_WARNING_FLAGS) -g -DDEBUG_RUNTIME $(RUNTIME_CXX_FLAGS) -m64 -target  $(RUNTIME_TRIPLE_64) -DCOMPILING_HALIDE_RUNTIME -DBITS_64 -emit-llvm -S $(SRC_DIR)/runtime/$*.cpp -o $@ -MMD -MP -MF $(BUILD_DIR)/initmod.$*_64_debug.d
+
+$(BUILD_DIR)/initmod.windows_%_32_debug.ll: $(SRC_DIR)/runtime/windows_%.cpp $(BUILD_DIR)/clang_ok
+	@mkdir -p $(@D)
+	$(CLANG) $(CXX_WARNING_FLAGS) -g -DDEBUG_RUNTIME $(RUNTIME_CXX_FLAGS) -m32 -target $(RUNTIME_TRIPLE_WIN_X86_32) -DCOMPILING_HALIDE_RUNTIME -DBITS_32 -emit-llvm -S $(SRC_DIR)/runtime/windows_$*.cpp -o $@ -MMD -MP -MF $(BUILD_DIR)/initmod.windows_$*_32_debug.d
+
+$(BUILD_DIR)/initmod.%_32_debug.ll: $(SRC_DIR)/runtime/%.cpp $(BUILD_DIR)/clang_ok
+	@mkdir -p $(@D)
+	$(CLANG) $(CXX_WARNING_FLAGS) -g -DDEBUG_RUNTIME -O3 $(RUNTIME_CXX_FLAGS) -m32 -target $(RUNTIME_TRIPLE_32) -DCOMPILING_HALIDE_RUNTIME -DBITS_32 -emit-llvm -S $(SRC_DIR)/runtime/$*.cpp -o $@ -MMD -MP -MF $(BUILD_DIR)/initmod.$*_32_debug.d
+
+$(BUILD_DIR)/initmod.%_ll.ll: $(SRC_DIR)/runtime/%.ll
+	@mkdir -p $(@D)
+	cp $(SRC_DIR)/runtime/$*.ll $(BUILD_DIR)/initmod.$*_ll.ll
+
+$(BUILD_DIR)/initmod.%.bc: $(BUILD_DIR)/initmod.%.ll $(BUILD_DIR)/llvm_ok
+	$(LLVM_AS) $(BUILD_DIR)/initmod.$*.ll -o $(BUILD_DIR)/initmod.$*.bc
+
+$(BUILD_DIR)/initmod.%.cpp: $(BIN_DIR)/binary2cpp $(BUILD_DIR)/initmod.%.bc
+	./$(BIN_DIR)/binary2cpp halide_internal_initmod_$* < $(BUILD_DIR)/initmod.$*.bc > $@
+
+$(BUILD_DIR)/initmod.%_h.cpp: $(BIN_DIR)/binary2cpp $(SRC_DIR)/runtime/%.h
+	./$(BIN_DIR)/binary2cpp halide_internal_runtime_header_$*_h < $(SRC_DIR)/runtime/$*.h > $@
+>>>>>>> master
 
 # Disable VCS-based implicit rules.
 % : %,v
