@@ -1614,8 +1614,8 @@ private:
                 producer = inject_stmt(producer, produceDef, LoopLevel::inlined().lock());
                 continue;
             }
-
             string def_prefix = f.name() + ".s" + std::to_string(func_stage.second) + ".";
+
             const auto &def = (func_stage.second == 0) ? f.definition() : f.updates()[func_stage.second - 1];
 
             const Stmt &produceDef = build_produce_definition(f, def_prefix, def, func_stage.second > 0,

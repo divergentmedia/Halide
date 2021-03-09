@@ -1,0 +1,2 @@
+/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ar qc libmultitarget.a multitarget-x86-64-osx-no_bounds_query-c_plus_plus_name_mangling-no_runtime.o multitarget-x86-64-osx-c_plus_plus_name_mangling-no_runtime.o multitarget_wrapper.o
+/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ranlib libmultitarget.a
